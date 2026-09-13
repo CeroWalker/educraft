@@ -1,0 +1,5 @@
+owner: Kodland-Sparks
+repo: kodland-launcher-releases
+provider: github
+releaseType: draft
+updaterCacheDirName: '@kodlanddesktop-updater'

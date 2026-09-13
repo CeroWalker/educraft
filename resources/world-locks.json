@@ -1,0 +1,7 @@
+{
+  "_README": "TEMPORARY until Sparks sends worlds[].unlockHash. This file ships inside the build (extraResources) so real students get gated worlds before the admin has a code field. Keyed by packId then worldId, the value is sha256(code.trim().toLowerCase()) from `npm run lock-code -- \"<code>\"`. The worldId MUST match the manifest exactly - if Sparks renames a world, its code stops matching and the world shows open. Editing codes means rebuilding. The manifest's unlockHash wins over this the moment Sparks sends it, and a local <dataDir>/world-locks.json overrides this for testing without a rebuild.",
+  "kodland-course-default": {
+    "kodlandcraft-m1-beginner": "1b20a43d8f170f7baca89b2597f13d2a95b1127b5e2786249b795ea0c5b326aa",
+    "kodlandcraft-m1-intermediate": "90536af700e6c9629b3a64a8d0fa6a2c038aacf2da3ee419c5e5e8749889301d"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "packId": "kodland-engineering",
+  "packVersion": "0.5.0-EDU",
+  "minecraft": "26.2",
+  "loader": {
+    "type": "fabric",
+    "version": "0.19.3"
+  },
+  "memory": {
+    "xmxMb": 2048
+  },
+  "diskMb": 1500,
+  "mods": [
+    {
+      "id": "fabric-api",
+      "version": "0.158.0+26.2",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/NqwNSxwA/fabric-api-0.158.0%2B26.2.jar",
+      "sha512": "4c2c1ebe74ffd54875a01ff371b53ba3d8674ac98d561f7dae02a96d3d37fbdbc5f5abc6e820f73b6154d6f873ddd05a442b0998ed2d456863dc0ad972e040a6",
+      "license": "Apache-2.0",
+      "source": "https://github.com/FabricMC/fabric",
+      "required": true
+    },
+    {
+      "id": "educraft-agent-bridge",
+      "version": "1.0.0",
+      "license": "MIT",
+      "required": true
+    },
+    {
+      "id": "lithium",
+      "version": "mc26.2-0.25.3-fabric",
+      "url": "https://cdn.modrinth.com/data/gvQqBUqZ/versions/f7vZ0VWU/lithium-fabric-0.25.3%2Bmc26.2.jar",
+      "sha512": "148b638f3c6229fbaf487120a2344a0af5e411a5aa6533d5db9d75da0a8c0d8304f63eb4cca13f4d03b2c9b4c23d559dd74c1d832422ef8a3087bd005e62a8bd",
+      "license": "LGPL-3.0-only",
+      "source": "https://github.com/caffeinemc/lithium-fabric"
+    },
+    {
+      "id": "ferrite-core",
+      "version": "9.0.0-fabric",
+      "url": "https://cdn.modrinth.com/data/uXXizFIs/versions/d5ddUdiB/ferritecore-9.0.0-fabric.jar",
+      "sha512": "d81fa97e11784c19d42f89c2f433831d007603dd7193cee45fa177e4a6a9c52b384b198586e04a0f7f63cd996fed713322578bde9a8db57e1188854ae5cbe584",
+      "license": "MIT",
+      "source": "https://github.com/malte0811/FerriteCore"
+    }
+  ],
+  "jvmArgs": []
+}

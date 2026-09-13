@@ -1,0 +1,30 @@
+# Development Directory
+dev/
+
+# Build & Distribution Outputs
+dist/
+app.asar
+*.asar
+*.exe
+
+# Dependencies
+**/node_modules/
+
+# Log & Temporary Files
+*.log
+bridge_launch.log
+latest.log
+__pycache__/
+*.pyc
+backup/
+.DS_Store
+
+# IDE & Tooling
+.idea/
+.vscode/
+*.swp
+*.tmp
+
+# Java Build Artifacts
+src_mod/build/
+src_mod/.gradle/
