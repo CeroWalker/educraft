@@ -69,7 +69,7 @@ chmod +x "$TARGET_DIR/run.sh" 2>/dev/null || true
 
 # 4. Download Performance Mods (Sodium & Lithium) from Modrinth CDN
 echo "[4/5] Performans modları (Sodium & Lithium) internetten indiriliyor..."
-SODIUM_URL="https://cdn.modrinth.com/data/AANobbMI/versions/FqtXxXy2/sodium-fabric-0.9.2-beta.2%2Bmc26.3r1.jar"
+SODIUM_URL="https://cdn.modrinth.com/data/AANobbMI/versions/xJZxADzI/sodium-fabric-0.9.2%2Bmc26.2.jar"
 LITHIUM_URL="https://cdn.modrinth.com/data/gvQqBUqZ/versions/f7vZ0VWU/lithium-fabric-0.25.3%2Bmc26.2.jar"
 
 curl -fsSL -A "Mozilla/5.0" "$SODIUM_URL" -o "$MODS_DIR/sodium-fabric-0.9.2+mc26.2.jar" 2>/dev/null || true

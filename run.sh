@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ELECTRON_BIN="${SCRIPT_DIR}/src_extracted/node_modules/.bin/electron"
 
 # Start Python Code Builder Bridge for Education Edition (with automatic port release)
 if command -v python3 &> /dev/null && [[ -f "${SCRIPT_DIR}/code_builder_bridge.py" ]]; then
@@ -13,43 +12,36 @@ if command -v python3 &> /dev/null && [[ -f "${SCRIPT_DIR}/code_builder_bridge.p
   trap 'kill ${BRIDGE_PID} 2>/dev/null || true' EXIT
 fi
 
-# Upstream Auto-Sync and Patch Engine
-if [[ -f "${SCRIPT_DIR}/sync_upstream_patch.js" ]] && command -v node &> /dev/null; then
-  node -e '
-  const fs = require("fs");
-  const path = require("path");
-  const scriptDir = process.argv[1];
-  const pkgPath = path.join(scriptDir, "src_extracted", "package.json");
-  if (!fs.existsSync(pkgPath)) process.exit(0);
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-  const baseVer = pkg.upstreamVersion || "0.8.6";
-  fetch("https://portfolio.kodland.org/api/v1/launcher/version", { signal: AbortSignal.timeout(2500) })
-    .then(r => r.json())
-    .then(meta => {
-      if (meta && meta.latest && meta.latest !== baseVer && meta.latest > baseVer) {
-        console.log(`\n⚡ Yeni resmi Kodland sürümü algılandı: (Mevcut Upstream: v${baseVer} -> Yeni: v${meta.latest})`);
-        console.log(`⚡ Otomatik çekiliyor ve tüm CraftForge Education yamaları enjekte ediliyor...\n`);
-        require("child_process").execSync(`node "${path.join(scriptDir, "sync_upstream_patch.js")}"`, { stdio: "inherit" });
-      }
-    })
-    .catch(() => {});
-  ' "${SCRIPT_DIR}" 2>/dev/null || true
+# Locate Electron Runner Binary
+ELECTRON_BIN=""
+if [[ -x "${SCRIPT_DIR}/src_extracted/node_modules/.bin/electron" ]]; then
+  ELECTRON_BIN="${SCRIPT_DIR}/src_extracted/node_modules/.bin/electron"
+elif [[ -x "${SCRIPT_DIR}/dev/src_extracted/node_modules/.bin/electron" ]]; then
+  ELECTRON_BIN="${SCRIPT_DIR}/dev/src_extracted/node_modules/.bin/electron"
+elif command -v electron &> /dev/null; then
+  ELECTRON_BIN="$(command -v electron)"
+elif command -v kodland-launcher &> /dev/null; then
+  ELECTRON_BIN="$(command -v kodland-launcher)"
+elif [[ -x "/opt/Kodland Launcher/kodland-launcher" ]]; then
+  ELECTRON_BIN="/opt/Kodland Launcher/kodland-launcher"
+elif [[ -x "/opt/kodland-launcher/kodland-launcher" ]]; then
+  ELECTRON_BIN="/opt/kodland-launcher/kodland-launcher"
 fi
 
-if [[ ! -x "${ELECTRON_BIN}" ]]; then
-  if command -v electron &> /dev/null; then
-    ELECTRON_BIN="$(command -v electron)"
-  else
-    echo "Hata: Electron çalışma zamanı bulunamadı. 'cd src_extracted && npm install' çalıştırın." >&2
-    exit 1
-  fi
-fi
-
-APP_TARGET="${SCRIPT_DIR}/src_extracted"
-if [[ ! -d "${APP_TARGET}" ]] && [[ -f "${SCRIPT_DIR}/app.asar" ]]; then
-  APP_TARGET="${SCRIPT_DIR}/app.asar"
+APP_TARGET="${SCRIPT_DIR}/app.asar"
+if [[ ! -f "${APP_TARGET}" ]] && [[ -d "${SCRIPT_DIR}/src_extracted" ]]; then
+  APP_TARGET="${SCRIPT_DIR}/src_extracted"
+elif [[ ! -f "${APP_TARGET}" ]] && [[ -d "${SCRIPT_DIR}/dev/src_extracted" ]]; then
+  APP_TARGET="${SCRIPT_DIR}/dev/src_extracted"
 fi
 
 echo "🎓 CraftForge Education Edition başlatılıyor..."
-exec "${ELECTRON_BIN}" "${APP_TARGET}" "$@"
+if [[ -n "${ELECTRON_BIN}" ]]; then
+  exec "${ELECTRON_BIN}" "${APP_TARGET}" "$@"
+elif command -v npx &> /dev/null; then
+  exec npx -y electron@28.2.0 "${APP_TARGET}" "$@"
+else
+  echo "Hata: Electron çalışma zamanı bulunamadı." >&2
+  exit 1
+fi
 
