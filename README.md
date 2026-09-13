@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-brightgreen.svg)]()
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 
-CraftForge Education Edition, Minecraft tabanlı Kodland / CraftForge ortamına entegre edilen, yüksek performanslı **Python Code Builder Bridge** ve **Fabric Mod Entegrasyonu** içeren eğitim odaklı özel yama paketidir.
+CraftForge Education Edition, Minecraft tabanlı, yüksek performanslı Python Code Builder Bridge ve Fabric Mod Entegrasyonu içeren eğitim odaklı özel yama paketidir.
 
 ---
 
