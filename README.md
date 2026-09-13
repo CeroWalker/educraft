@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/CeroWalker/educraft/main/install.sh
 * **`install.ps1` / `install.sh`**: İşletim sistemine uygun tek satırlık akıllı çevrimiçi kurucular.
 * **`code_builder_bridge.py`**: Minecraft oyunu ile Python kodlama ekranı arasındaki iletişimi sağlayan daemon köprüsü.
 * **`resources/mods/educraft-agent-bridge-1.0.0.jar`**: Minecraft Fabric 1.20.x mimarisine entegre çalışan Java Agent Bridge mod dosyası.
-* **`resources/mods/sodium-fabric-...` & `lithium-fabric-...`**: Düşük donanımlı bilgisayarlarda akıcı oyun deneyimi sağlayan performans modları.
+* **`Sodium` & `Lithium`**: Düşük donanımlı bilgisayarlarda akıcı oyun deneyimi sağlayan performans modları.
 * **`launch.vbs` & `run.sh`**: Konsol penceresi açmadan arka planda sessiz başlatmayı sağlayan scriptler.
 
 ---
