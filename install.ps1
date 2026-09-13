@@ -102,8 +102,8 @@ try { Invoke-WebRequest -Uri "$rawUrl/resources/mods/educraft-agent-bridge-1.0.0
 
 # 6. Download Performance Mods (Sodium & Lithium) from Modrinth CDN
 Write-Host "[➜] Performans modlari (Sodium & Lithium) internetten indiriliyor..." -ForegroundColor Green
-$sodiumUrl = "https://cdn.modrinth.com/data/AANobb73/versions/7HdQc1Bv/sodium-fabric-0.9.2%2Bmc26.2.jar"
-$lithiumUrl = "https://cdn.modrinth.com/data/gvA2b1u0/versions/M6R94fQy/lithium-fabric-0.25.3%2Bmc26.2.jar"
+$sodiumUrl = "https://cdn.modrinth.com/data/AANobbMI/versions/FqtXxXy2/sodium-fabric-0.9.2-beta.2%2Bmc26.3r1.jar"
+$lithiumUrl = "https://cdn.modrinth.com/data/gvQqBUqZ/versions/f7vZ0VWU/lithium-fabric-0.25.3%2Bmc26.2.jar"
 
 try { Invoke-WebRequest -Uri $sodiumUrl -UserAgent $ua -OutFile "$modsDir\sodium-fabric-0.9.2+mc26.2.jar" -ErrorAction SilentlyContinue } catch {}
 try { Invoke-WebRequest -Uri $lithiumUrl -UserAgent $ua -OutFile "$modsDir\lithium-fabric-0.25.3+mc26.2.jar" -ErrorAction SilentlyContinue } catch {}

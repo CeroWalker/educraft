@@ -433,10 +433,10 @@ class CodeBuilderBridge:
         print(f"💻 [Edu Script Command]: {cmd}")
         if cmd.startswith("agent.spawn"):
             tp_cmd = 'execute at @p run tp @e[tag=agent_robot,limit=1] ^ ^0 ^2'
-            summon_cmd = 'execute at @p unless entity @e[tag=agent_robot] run summon armor_stand ^ ^0 ^2 {Small:1b,NoGravity:1b,ShowArms:1b,ArmorItems:[{},{},{},{id:"minecraft:iron_block",Count:1b}],HandItems:[{id:"minecraft:iron_pickaxe",Count:1b},{}],CustomName:\'"Agent Robot"\',CustomNameVisible:1b,Tags:["agent_robot"]}'
+            summon_cmd = 'execute at @p unless entity @e[tag=agent_robot] run summon iron_golem ^ ^0 ^2 {CustomName:\'"Agent Robot"\',CustomNameVisible:1b,NoAI:1b,Invulnerable:1b,Tags:["agent_robot"]}'
             self._dispatch_mc_command(tp_cmd)
             self._dispatch_mc_command(summon_cmd)
-            return "OK: Agent Robot (1-Block Small Robot) Teleported / Spawned on ground"
+            return "OK: Agent Robot Teleported / Spawned on ground"
 
         elif cmd.startswith("agent.turn") or cmd.startswith("agent.look"):
             parts = cmd.split("(")

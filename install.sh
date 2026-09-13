@@ -1,3 +1,8 @@
+#!/usr/bin/env bash
+# CraftForge Education Edition - Linux / macOS Online Installer
+# Kullanım (Tek Satır):
+# curl -fsSL https://raw.githubusercontent.com/CeroWalker/educraft/master/install.sh | bash
+
 set -e
 
 REPO="${REPO:-CeroWalker/educraft}"
@@ -62,20 +67,26 @@ curl -fsSL "$RAW_URL/icon.png" -o "$TARGET_DIR/icon.png" 2>/dev/null || curl -fs
 curl -fsSL "$RAW_URL/resources/mods/educraft-agent-bridge-1.0.0.jar" -o "$MODS_DIR/educraft-agent-bridge-1.0.0.jar" 2>/dev/null || curl -fsSL "$BASE_URL/educraft-agent-bridge-1.0.0.jar" -o "$MODS_DIR/educraft-agent-bridge-1.0.0.jar" 2>/dev/null || true
 chmod +x "$TARGET_DIR/run.sh" 2>/dev/null || true
 
-# 4. Download Performance Mods (Sodium & Lithium) from Modrinth CDN / GitHub
+# 4. Download Performance Mods (Sodium & Lithium) from Modrinth CDN
 echo "[4/5] Performans modları (Sodium & Lithium) internetten indiriliyor..."
-SODIUM_URL="https://cdn.modrinth.com/data/AANobb73/versions/7HdQc1Bv/sodium-fabric-0.9.2%2Bmc26.2.jar"
-LITHIUM_URL="https://cdn.modrinth.com/data/gvA2b1u0/versions/M6R94fQy/lithium-fabric-0.25.3%2Bmc26.2.jar"
+SODIUM_URL="https://cdn.modrinth.com/data/AANobbMI/versions/FqtXxXy2/sodium-fabric-0.9.2-beta.2%2Bmc26.3r1.jar"
+LITHIUM_URL="https://cdn.modrinth.com/data/gvQqBUqZ/versions/f7vZ0VWU/lithium-fabric-0.25.3%2Bmc26.2.jar"
 
-curl -fsSL "$SODIUM_URL" -o "$MODS_DIR/sodium-fabric-0.9.2+mc26.2.jar" || curl -fsSL "$BASE_URL/sodium-fabric-0.9.2+mc26.2.jar" -o "$MODS_DIR/sodium-fabric-0.9.2+mc26.2.jar" 2>/dev/null || true
-curl -fsSL "$LITHIUM_URL" -o "$MODS_DIR/lithium-fabric-0.25.3+mc26.2.jar" || curl -fsSL "$BASE_URL/lithium-fabric-0.25.3+mc26.2.jar" -o "$MODS_DIR/lithium-fabric-0.25.3+mc26.2.jar" 2>/dev/null || true
+curl -fsSL -A "Mozilla/5.0" "$SODIUM_URL" -o "$MODS_DIR/sodium-fabric-0.9.2+mc26.2.jar" 2>/dev/null || true
+curl -fsSL -A "Mozilla/5.0" "$LITHIUM_URL" -o "$MODS_DIR/lithium-fabric-0.25.3+mc26.2.jar" 2>/dev/null || true
 
-# 5. Desktop Shortcut
-echo "[5/5] Masaüstü entegrasyonu yapılıyor..."
+# 5. Desktop & Application Menu Integration
+echo "[5/5] Masaüstü ve uygulama menüsü entegrasyonu yapılıyor..."
 if [ "$OS_TYPE" = "Linux" ]; then
-    DESKTOP_DIR="$HOME/.local/share/applications"
-    mkdir -p "$DESKTOP_DIR"
-    cat << EODESK > "$DESKTOP_DIR/craftforge-edu.desktop"
+    # 5.1 Icon directory
+    ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
+    mkdir -p "$ICON_DIR"
+    cp -f "$TARGET_DIR/icon.png" "$ICON_DIR/craftforge-edu.png" 2>/dev/null || true
+
+    # 5.2 Application Menu (.desktop)
+    APP_DIR="$HOME/.local/share/applications"
+    mkdir -p "$APP_DIR"
+    cat << EODESK > "$APP_DIR/craftforge-edu.desktop"
 [Desktop Entry]
 Name=CraftForge Education Edition
 Comment=Minecraft Python Code Builder Education Launcher
@@ -84,8 +95,29 @@ Icon=$TARGET_DIR/icon.png
 Terminal=false
 Type=Application
 Categories=Education;Development;Game;
+StartupWMClass=kodland-launcher
 EODESK
-    chmod +x "$DESKTOP_DIR/craftforge-edu.desktop"
+    chmod +x "$APP_DIR/craftforge-edu.desktop" 2>/dev/null || true
+    update-desktop-database "$APP_DIR" 2>/dev/null || true
+    gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+
+    # 5.3 User Desktop Folder Shortcut (~/Desktop or ~/Masaüstü)
+    USER_DESKTOP="$HOME/Desktop"
+    if [ -d "$HOME/Masaüstü" ]; then USER_DESKTOP="$HOME/Masaüstü"; fi
+    if command -v xdg-user-dir &>/dev/null; then
+        DETECTED_DESKTOP="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+        if [ -n "$DETECTED_DESKTOP" ] && [ -d "$DETECTED_DESKTOP" ]; then
+            USER_DESKTOP="$DETECTED_DESKTOP"
+        fi
+    fi
+
+    if [ -d "$USER_DESKTOP" ]; then
+        cp -f "$APP_DIR/craftforge-edu.desktop" "$USER_DESKTOP/craftforge-edu.desktop"
+        chmod +x "$USER_DESKTOP/craftforge-edu.desktop" 2>/dev/null || true
+        if command -v gio &>/dev/null; then
+            gio trust "$USER_DESKTOP/craftforge-edu.desktop" 2>/dev/null || true
+        fi
+    fi
 fi
 
 echo "========================================================="
