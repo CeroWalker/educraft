@@ -59,12 +59,13 @@ else
     BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
 fi
 RAW_URL="https://raw.githubusercontent.com/$REPO/master"
+CB="?cb=$(date +%s)"
 
-curl -fsSL "$BASE_URL/app.asar" -o "$TARGET_DIR/app.asar" 2>/dev/null || curl -fsSL "$RAW_URL/app.asar" -o "$TARGET_DIR/app.asar" 2>/dev/null || true
-curl -fsSL "$RAW_URL/code_builder_bridge.py" -o "$TARGET_DIR/code_builder_bridge.py" 2>/dev/null || curl -fsSL "$BASE_URL/code_builder_bridge.py" -o "$TARGET_DIR/code_builder_bridge.py" 2>/dev/null || true
-curl -fsSL "$RAW_URL/run.sh" -o "$TARGET_DIR/run.sh" 2>/dev/null || curl -fsSL "$BASE_URL/run.sh" -o "$TARGET_DIR/run.sh" 2>/dev/null || true
-curl -fsSL "$RAW_URL/icon.png" -o "$TARGET_DIR/icon.png" 2>/dev/null || curl -fsSL "$BASE_URL/icon.png" -o "$TARGET_DIR/icon.png" 2>/dev/null || true
-curl -fsSL "$RAW_URL/resources/mods/educraft-agent-bridge-1.0.0.jar" -o "$MODS_DIR/educraft-agent-bridge-1.0.0.jar" 2>/dev/null || curl -fsSL "$BASE_URL/educraft-agent-bridge-1.0.0.jar" -o "$MODS_DIR/educraft-agent-bridge-1.0.0.jar" 2>/dev/null || true
+curl -fsSL "$BASE_URL/app.asar" -o "$TARGET_DIR/app.asar" 2>/dev/null || curl -fsSL "$RAW_URL/app.asar$CB" -o "$TARGET_DIR/app.asar" 2>/dev/null || true
+curl -fsSL "$RAW_URL/code_builder_bridge.py$CB" -o "$TARGET_DIR/code_builder_bridge.py" 2>/dev/null || curl -fsSL "$BASE_URL/code_builder_bridge.py" -o "$TARGET_DIR/code_builder_bridge.py" 2>/dev/null || true
+curl -fsSL "$RAW_URL/run.sh$CB" -o "$TARGET_DIR/run.sh" 2>/dev/null || curl -fsSL "$BASE_URL/run.sh" -o "$TARGET_DIR/run.sh" 2>/dev/null || true
+curl -fsSL "$RAW_URL/icon.png$CB" -o "$TARGET_DIR/icon.png" 2>/dev/null || curl -fsSL "$BASE_URL/icon.png" -o "$TARGET_DIR/icon.png" 2>/dev/null || true
+curl -fsSL "$RAW_URL/resources/mods/educraft-agent-bridge-1.0.0.jar$CB" -o "$MODS_DIR/educraft-agent-bridge-1.0.0.jar" 2>/dev/null || curl -fsSL "$BASE_URL/educraft-agent-bridge-1.0.0.jar" -o "$MODS_DIR/educraft-agent-bridge-1.0.0.jar" 2>/dev/null || true
 chmod +x "$TARGET_DIR/run.sh" 2>/dev/null || true
 
 # 4. Download Performance Mods (Sodium & Lithium) from Modrinth CDN

@@ -73,6 +73,7 @@ $baseUrl = if ($Version -eq "latest") {
     "https://github.com/$Repo/releases/download/$Version"
 }
 $rawUrl = "https://raw.githubusercontent.com/$Repo/master"
+$cb = "?cb=" + [DateTimeOffset]::Now.ToUnixTimeSeconds()
 
 Write-Host "[➜] GitHub uzerinden yama dosyalari indiriliyor..." -ForegroundColor Green
 
@@ -83,7 +84,7 @@ try {
     $asarDownloaded = $true
 } catch {
     try {
-        Invoke-WebRequest -Uri "$rawUrl/app.asar" -UserAgent $ua -OutFile "$targetDir\app.asar" -ErrorAction Stop
+        Invoke-WebRequest -Uri "$rawUrl/app.asar$cb" -UserAgent $ua -OutFile "$targetDir\app.asar" -ErrorAction Stop
         $asarDownloaded = $true
     } catch {}
 }
@@ -95,10 +96,11 @@ if (-not $asarDownloaded) {
 }
 
 # Download Core Patch Scripts
-try { Invoke-WebRequest -Uri "$rawUrl/code_builder_bridge.py" -UserAgent $ua -OutFile "$targetDir\code_builder_bridge.py" -ErrorAction SilentlyContinue } catch {}
-try { Invoke-WebRequest -Uri "$rawUrl/launch.vbs" -UserAgent $ua -OutFile "$targetDir\launch.vbs" -ErrorAction SilentlyContinue } catch {}
-try { Invoke-WebRequest -Uri "$rawUrl/icon.ico" -UserAgent $ua -OutFile "$targetDir\icon.ico" -ErrorAction SilentlyContinue } catch {}
-try { Invoke-WebRequest -Uri "$rawUrl/resources/mods/educraft-agent-bridge-1.0.0.jar" -UserAgent $ua -OutFile "$modsDir\educraft-agent-bridge-1.0.0.jar" -ErrorAction SilentlyContinue } catch {}
+try { Invoke-WebRequest -Uri "$rawUrl/code_builder_bridge.py$cb" -UserAgent $ua -OutFile "$targetDir\code_builder_bridge.py" -ErrorAction SilentlyContinue } catch {}
+try { Invoke-WebRequest -Uri "$rawUrl/launch.vbs$cb" -UserAgent $ua -OutFile "$targetDir\launch.vbs" -ErrorAction SilentlyContinue } catch {}
+try { Invoke-WebRequest -Uri "$rawUrl/run.sh$cb" -UserAgent $ua -OutFile "$targetDir\run.sh" -ErrorAction SilentlyContinue } catch {}
+try { Invoke-WebRequest -Uri "$rawUrl/icon.ico$cb" -UserAgent $ua -OutFile "$targetDir\icon.ico" -ErrorAction SilentlyContinue } catch {}
+try { Invoke-WebRequest -Uri "$rawUrl/resources/mods/educraft-agent-bridge-1.0.0.jar$cb" -UserAgent $ua -OutFile "$modsDir\educraft-agent-bridge-1.0.0.jar" -ErrorAction SilentlyContinue } catch {}
 
 # 6. Download Performance Mods (Sodium & Lithium) from Modrinth CDN
 Write-Host "[➜] Performans modlari (Sodium & Lithium) internetten indiriliyor..." -ForegroundColor Green
