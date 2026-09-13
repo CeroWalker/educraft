@@ -17,7 +17,7 @@ Kurulum yapmak için bilgisayarınıza yüzlerce megabaytlık bağımlılık vey
 PowerShell'i açın ve şu komutu çalıştırın:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/CeroWalker/educraft/main/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/CeroWalker/educraft/master/install.ps1 | iex"
 ```
 
 > **Not:** Sistemde Python 3 yüklü değilse, kurulum scripti resmi Python 3.11'i sessiz modda otomatik kuracaktır. Masaüstünde görünmez başlatıcı kısayolu (`CraftForge Education.lnk`) otomatik oluşturulur.
@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercon
 Terminali açın ve şu komutu çalıştırın:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CeroWalker/educraft/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/CeroWalker/educraft/master/install.sh | bash
 ```
 
 > **Not:** Linux dağıtımınızın paket yöneticisine (`apt`, `dnf`, `pacman`, `zypper`, `apk`) veya macOS Homebrew yapısına uygun şekilde Python 3 doğrulanır ve uygulama menünüze `.desktop` kısayolu eklenir.
