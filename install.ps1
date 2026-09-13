@@ -66,7 +66,7 @@ $baseUrl = if ($Version -eq "latest") {
 } else {
     "https://github.com/$Repo/releases/download/$Version"
 }
-$rawUrl = "https://raw.githubusercontent.com/$Repo/main"
+$rawUrl = "https://raw.githubusercontent.com/$Repo/master"
 
 Write-Host "[➜] GitHub uzerinden yama dosyalari indiriliyor..." -ForegroundColor Green
 

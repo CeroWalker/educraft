@@ -53,7 +53,7 @@ if [ "$VERSION" = "latest" ]; then
 else
     BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
 fi
-RAW_URL="https://raw.githubusercontent.com/$REPO/main"
+RAW_URL="https://raw.githubusercontent.com/$REPO/master"
 
 curl -fsSL "$BASE_URL/app.asar" -o "$TARGET_DIR/app.asar" 2>/dev/null || curl -fsSL "$RAW_URL/app.asar" -o "$TARGET_DIR/app.asar" 2>/dev/null || true
 curl -fsSL "$RAW_URL/code_builder_bridge.py" -o "$TARGET_DIR/code_builder_bridge.py" 2>/dev/null || curl -fsSL "$BASE_URL/code_builder_bridge.py" -o "$TARGET_DIR/code_builder_bridge.py" 2>/dev/null || true
