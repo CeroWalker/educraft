@@ -267,14 +267,6 @@ class ChemistryAPI:
 class WebIDEHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/api/trigger_overlay':
-            data_dir = get_data_dir()
-            os.makedirs(data_dir, exist_ok=True)
-            flag_file = os.path.join(data_dir, "open_ide.flag")
-            try:
-                with open(flag_file, "w") as f:
-                    f.write(str(time.time()))
-            except Exception:
-                pass
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"OK")
@@ -432,10 +424,12 @@ class CodeBuilderBridge:
     def _process_command(self, cmd):
         print(f"💻 [Edu Script Command]: {cmd}")
         if cmd.startswith("agent.spawn"):
-            tp_cmd = 'execute at @p run tp @e[tag=agent_robot,limit=1] ^ ^0 ^2'
-            summon_cmd = 'execute at @p unless entity @e[tag=agent_robot] run summon iron_golem ^ ^0 ^2 {CustomName:\'"Agent Robot"\',CustomNameVisible:1b,NoAI:1b,Invulnerable:1b,Tags:["agent_robot"]}'
-            self._dispatch_mc_command(tp_cmd)
+            summon_cmd = 'execute at @p rotated ~ 0 unless entity @e[tag=agent_robot] run summon iron_golem ^ ^0 ^2 {CustomName:\'"Agent Robot"\',CustomNameVisible:1b,NoAI:1b,Invulnerable:1b,Tags:["agent_robot"],attributes:[{id:"minecraft:scale",base:0.5}]}'
+            tp_cmd = 'execute at @p rotated ~ 0 run tp @e[tag=agent_robot,limit=1] ^ ^0 ^2'
+            scale_cmd = 'attribute @e[tag=agent_robot,limit=1] minecraft:scale base set 0.5'
             self._dispatch_mc_command(summon_cmd)
+            self._dispatch_mc_command(tp_cmd)
+            self._dispatch_mc_command(scale_cmd)
             return "OK: Agent Robot Teleported / Spawned on ground"
 
         elif cmd.startswith("agent.turn") or cmd.startswith("agent.look"):
@@ -491,13 +485,13 @@ class CodeBuilderBridge:
             elif direction in ("up", "above", "top"):
                 offset = "^ ^1 ^"
             elif direction in ("back", "behind"):
-                offset = "^ ^0 ^-1.5"
+                offset = "^ ^0 ^-1"
             elif direction in ("left", "west"):
-                offset = "^-1.5 ^0 ^"
+                offset = "^-1 ^0 ^"
             elif direction in ("right", "east"):
-                offset = "^1.5 ^0 ^"
+                offset = "^1 ^0 ^"
             else:
-                offset = "^ ^0 ^1.5"
+                offset = "^ ^0 ^1"
 
             mc_cmd = f'execute at @e[tag=agent_robot,limit=1] run setblock {offset} minecraft:{block}'
             self._dispatch_mc_command(mc_cmd)
@@ -516,13 +510,13 @@ class CodeBuilderBridge:
             elif direction in ("up", "above", "top"):
                 offset = "^ ^1 ^"
             elif direction in ("back", "behind"):
-                offset = "^ ^0 ^-1.5"
+                offset = "^ ^0 ^-1"
             elif direction in ("left", "west"):
-                offset = "^-1.5 ^0 ^"
+                offset = "^-1 ^0 ^"
             elif direction in ("right", "east"):
-                offset = "^1.5 ^0 ^"
+                offset = "^1 ^0 ^"
             else:
-                offset = "^ ^0 ^1.5"
+                offset = "^ ^0 ^1"
 
             mc_cmd = f'execute at @e[tag=agent_robot,limit=1] run setblock {offset} minecraft:air destroy'
             self._dispatch_mc_command(mc_cmd)
