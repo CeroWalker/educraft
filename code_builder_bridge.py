@@ -432,13 +432,11 @@ class CodeBuilderBridge:
     def _process_command(self, cmd):
         print(f"💻 [Edu Script Command]: {cmd}")
         if cmd.startswith("agent.spawn"):
-            tp_cmd = 'execute at @p run tp @e[tag=agent_robot,limit=1] ^ ^1 ^2'
-            summon_cmd = 'execute at @p unless entity @e[tag=agent_robot] run summon iron_golem ^ ^1 ^2 {Attributes:[{Name:"generic.scale",Base:0.4d}],CustomName:\'"Agent Robot"\',CustomNameVisible:1b,NoAI:1b,Invulnerable:1b,Tags:["agent_robot"]}'
-            scale_cmd = 'attribute @e[tag=agent_robot] generic.scale base set 0.4'
+            tp_cmd = 'execute at @p run tp @e[tag=agent_robot,limit=1] ^ ^0 ^2'
+            summon_cmd = 'execute at @p unless entity @e[tag=agent_robot] run summon armor_stand ^ ^0 ^2 {Small:1b,NoGravity:1b,ShowArms:1b,ArmorItems:[{},{},{},{id:"minecraft:iron_block",Count:1b}],HandItems:[{id:"minecraft:iron_pickaxe",Count:1b},{}],CustomName:\'"Agent Robot"\',CustomNameVisible:1b,Tags:["agent_robot"]}'
             self._dispatch_mc_command(tp_cmd)
             self._dispatch_mc_command(summon_cmd)
-            self._dispatch_mc_command(scale_cmd)
-            return "OK: Agent Robot (Mini 1-Block Scale) Teleported / Spawned"
+            return "OK: Agent Robot (1-Block Small Robot) Teleported / Spawned on ground"
 
         elif cmd.startswith("agent.turn") or cmd.startswith("agent.look"):
             parts = cmd.split("(")
@@ -491,15 +489,15 @@ class CodeBuilderBridge:
             if direction in ("down", "below", "bottom"):
                 offset = "^ ^-1 ^"
             elif direction in ("up", "above", "top"):
-                offset = "^ ^2 ^"
+                offset = "^ ^1 ^"
             elif direction in ("back", "behind"):
-                offset = "^ ^1 ^-1.5"
+                offset = "^ ^0 ^-1.5"
             elif direction in ("left", "west"):
-                offset = "^-1.5 ^1 ^"
+                offset = "^-1.5 ^0 ^"
             elif direction in ("right", "east"):
-                offset = "^1.5 ^1 ^"
+                offset = "^1.5 ^0 ^"
             else:
-                offset = "^ ^1 ^1.5"
+                offset = "^ ^0 ^1.5"
 
             mc_cmd = f'execute at @e[tag=agent_robot,limit=1] run setblock {offset} minecraft:{block}'
             self._dispatch_mc_command(mc_cmd)
@@ -516,15 +514,15 @@ class CodeBuilderBridge:
             if direction in ("down", "below", "bottom"):
                 offset = "^ ^-1 ^"
             elif direction in ("up", "above", "top"):
-                offset = "^ ^2 ^"
+                offset = "^ ^1 ^"
             elif direction in ("back", "behind"):
-                offset = "^ ^1 ^-1.5"
+                offset = "^ ^0 ^-1.5"
             elif direction in ("left", "west"):
-                offset = "^-1.5 ^1 ^"
+                offset = "^-1.5 ^0 ^"
             elif direction in ("right", "east"):
-                offset = "^1.5 ^1 ^"
+                offset = "^1.5 ^0 ^"
             else:
-                offset = "^ ^1 ^1.5"
+                offset = "^ ^0 ^1.5"
 
             mc_cmd = f'execute at @e[tag=agent_robot,limit=1] run setblock {offset} minecraft:air destroy'
             self._dispatch_mc_command(mc_cmd)
