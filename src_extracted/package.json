@@ -8,6 +8,8 @@
     "@kodland/datapack": "*",
     "@kodland/i18n": "*",
     "@kodland/launch": "*",
+    "@kodland/minescript": "*",
+    "@kodland/pack": "*",
     "@kodland/skin": "*",
     "electron-updater": "6.8.9"
   },

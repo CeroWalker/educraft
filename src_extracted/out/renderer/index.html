@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      No remote origin is allowed. The launcher's UI is fully local; everything
+      that talks to the network (Mojang, the pack CDN, Kodland SSO) runs in the
+      main process. A renderer that cannot reach the internet cannot leak a token.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: kodland-img:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>CraftForge Education Edition</title>
+    <script type="module" crossorigin src="./assets/index-DRm3iJnW.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BySeoR32.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

@@ -1,0 +1,77 @@
+"use strict";
+const electron = require("electron");
+function subscribe(channel, listener) {
+  const wrapped = (_event, payload) => listener(payload);
+  electron.ipcRenderer.on(channel, wrapped);
+  return () => electron.ipcRenderer.removeListener(channel, wrapped);
+}
+const api = {
+  getInitialLocale: () => electron.ipcRenderer.invoke("app:initial-locale"),
+  signOut: () => electron.ipcRenderer.invoke("auth:sign-out"),
+  onAuthState: (listener) => subscribe("auth:state", listener),
+  openProfile: () => electron.ipcRenderer.invoke("auth:open-profile"),
+  beginBrowserSignIn: () => electron.ipcRenderer.invoke("auth:begin-browser-sign-in"),
+  beginCodePairing: () => electron.ipcRenderer.invoke("auth:begin-code-pairing"),
+  cancelPairing: () => electron.ipcRenderer.invoke("auth:cancel-pairing"),
+  openPairingPage: () => electron.ipcRenderer.invoke("auth:open-pairing-page"),
+  prepare: () => electron.ipcRenderer.invoke("launcher:prepare"),
+  launch: (worldId) => electron.ipcRenderer.invoke("launcher:launch", worldId),
+  removeGame: () => electron.ipcRenderer.invoke("launcher:remove-game"),
+  verifyFiles: () => electron.ipcRenderer.invoke("launcher:verify-files"),
+  onState: (listener) => subscribe("launcher:state", listener),
+  getWorldTemplates: () => electron.ipcRenderer.invoke("worlds:templates"),
+  retryWorldLibrary: () => electron.ipcRenderer.invoke("worlds:retry"),
+  unlockWorld: (code) => electron.ipcRenderer.invoke("worlds:unlock", code),
+  getMyWorlds: (lessonId) => electron.ipcRenderer.invoke("my-worlds:list", lessonId),
+  createWorld: (templateId) => electron.ipcRenderer.invoke("my-worlds:create", templateId),
+  renameMyWorld: (id, name) => electron.ipcRenderer.invoke("my-worlds:rename", id, name),
+  deleteMyWorld: (id) => electron.ipcRenderer.invoke("my-worlds:delete", id),
+  getWorldSizes: () => electron.ipcRenderer.invoke("my-worlds:sizes"),
+  getMods: () => electron.ipcRenderer.invoke("mods:list"),
+  getStudios: () => electron.ipcRenderer.invoke("studios:get"),
+  setMod: (modId, enabled) => electron.ipcRenderer.invoke("mods:set", modId, enabled),
+  onCatalogueChanged: (listener) => subscribe("catalogue:changed", () => listener()),
+  onSkinsChanged: (listener) => subscribe("skins:changed", () => listener()),
+  openLogs: () => electron.ipcRenderer.invoke("launcher:open-logs"),
+  getAppUpdate: () => electron.ipcRenderer.invoke("update:state"),
+  onAppUpdate: (listener) => subscribe("update:state-changed", listener),
+  checkForAppUpdate: () => electron.ipcRenderer.invoke("update:check"),
+  installAppUpdate: () => electron.ipcRenderer.invoke("update:install"),
+  openDownloadPage: () => electron.ipcRenderer.invoke("update:open-page"),
+  getAppliedSkin: () => electron.ipcRenderer.invoke("skins:current"),
+  getSkinLibrary: () => electron.ipcRenderer.invoke("skins:library"),
+  getGalleryPage: (scope, cursor) => electron.ipcRenderer.invoke("gallery:page", scope, cursor),
+  collectSkin: (projectId, title) => electron.ipcRenderer.invoke("gallery:collect", projectId, title),
+  getSkinDraft: () => electron.ipcRenderer.invoke("editor:draft"),
+  saveSkinDraft: (doc) => electron.ipcRenderer.invoke("editor:save-draft", doc),
+  applyDrawnSkin: (png) => electron.ipcRenderer.invoke("editor:apply", png),
+  publishSkin: (doc, png) => electron.ipcRenderer.invoke("editor:publish", doc, png),
+  checkPublished: () => electron.ipcRenderer.invoke("editor:check-published"),
+  wearSkin: (id) => electron.ipcRenderer.invoke("skins:wear", id),
+  forgetSkin: (id) => electron.ipcRenderer.invoke("skins:forget", id),
+  keepAppliedSkin: () => electron.ipcRenderer.invoke("skins:keep-applied"),
+  onSkin: (listener) => subscribe("skins:state", listener),
+  getDatapacks: () => electron.ipcRenderer.invoke("datapack:list"),
+  getDatapackDoc: (slug) => electron.ipcRenderer.invoke("datapack:doc", slug),
+  saveDatapackDoc: (slug, doc) => electron.ipcRenderer.invoke("datapack:save", slug, doc),
+  createDatapack: (presetId, name, text) => electron.ipcRenderer.invoke("datapack:create", presetId, name, text),
+  renameDatapack: (slug, name) => electron.ipcRenderer.invoke("datapack:rename", slug, name),
+  removeDatapack: (slug) => electron.ipcRenderer.invoke("datapack:remove", slug),
+  wantDatapack: (slug, wanted) => electron.ipcRenderer.invoke("datapack:want", slug, wanted),
+  getDatapackCatalogue: () => electron.ipcRenderer.invoke("datapack:catalogue"),
+  onDatapack: (listener) => subscribe("datapack:state", listener),
+  // A signal with no payload, exactly like `skins:changed`: two packs changing
+  // in a row publishes the same state twice, React skips the effect, and the
+  // list never re-reads.
+  onDatapacksChanged: (listener) => subscribe("datapack:changed", listener),
+  getScripts: () => electron.ipcRenderer.invoke("python:list"),
+  getScriptText: (slug) => electron.ipcRenderer.invoke("python:doc", slug),
+  saveScriptText: (slug, text) => electron.ipcRenderer.invoke("python:save", slug, text),
+  createScript: (presetId, name, text) => electron.ipcRenderer.invoke("python:create", presetId, name, text),
+  renameScript: (slug, next) => electron.ipcRenderer.invoke("python:rename", slug, next),
+  removeScript: (slug) => electron.ipcRenderer.invoke("python:remove", slug),
+  wantScript: (slug, wanted) => electron.ipcRenderer.invoke("python:want", slug, wanted),
+  onPython: (listener) => subscribe("python:state", listener),
+  onScriptsChanged: (listener) => subscribe("python:changed", listener)
+};
+electron.contextBridge.exposeInMainWorld("kodland", api);
