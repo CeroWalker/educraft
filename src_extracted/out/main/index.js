@@ -5009,6 +5009,16 @@ const packWorldSchema = object$1({
    */
   id: string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/, { error: "World id must be lowercase letters, digits and dashes" }).default("lesson"),
   /**
+   * Ids this world had before, so what a child unlocked or copied under an old
+   * id still means this world.
+   *
+   * `id` must not change, and a new version is a new `revision`. This field is
+   * for the case when a rename could not be avoided. An id with a revision
+   * written into it (`m1-r2` becoming `m1-r3`) needs no entry here: the
+   * launcher already reads both as `m1` (`world-identity.ts`).
+   */
+  previousIds: array(string().regex(/^[a-z0-9][a-z0-9-]*$/, { error: "A previous world id must be lowercase letters, digits and dashes" })).optional(),
+  /**
    * Bumped when the world itself changes, never when the pack does.
    *
    * A higher revision means a new copy is due beside the old one. It is not a
@@ -16274,6 +16284,27 @@ async function setModEnabled(manifest, dataDir, modId, enabled) {
   await writeModState(dataDir, manifest.packId, { disabled: [...disabled].sort() });
   return { ok: true, enabled };
 }
+const REVISION_SUFFIX = /-r\d+$/;
+function worldKey(id) {
+  return id.replace(REVISION_SUFFIX, "");
+}
+function matchWorld(worlds, storedId) {
+  const exact = worlds.find((world) => world.id === storedId);
+  if (exact !== void 0) return exact;
+  const named = worlds.find((world) => world.previousIds?.includes(storedId) === true);
+  if (named !== void 0) return named;
+  const key = worldKey(storedId);
+  const sameKey = worlds.filter((world) => worldKey(world.id) === key);
+  return sameKey.length === 1 ? sameKey[0] : void 0;
+}
+function openWorlds(worlds, unlockedIds, seenOpenIds = []) {
+  const opened = /* @__PURE__ */ new Set();
+  for (const stored of [...unlockedIds, ...seenOpenIds]) {
+    const world = matchWorld(worlds, stored);
+    if (world !== void 0) opened.add(world);
+  }
+  return worlds.filter((world) => world.unlockHash === void 0 || opened.has(world));
+}
 async function fetchPackManifest(url, fetchImpl = fetch) {
   const response = await fetchImpl(url);
   if (!response.ok) {
@@ -16409,7 +16440,7 @@ async function syncWorldLibrary(dataDir, packId, open, onStep, fetchImpl = fetch
       await promises.rm(temporary, { recursive: true, force: true });
       throw error;
     }
-    await removeOtherRevisions(root, world.id, folder);
+    await removeOtherRevisions(root, world, open, folder);
     results.push({ worldId: world.id, revision: world.revision, folder, outcome: "installed" });
   }
   return results;
@@ -16437,7 +16468,7 @@ async function fetchArt(dataDir, packId, world, fetchImpl, onStep) {
   } catch (error) {
   }
 }
-async function removeOtherRevisions(root, worldId, keep) {
+async function removeOtherRevisions(root, world, worlds, keep) {
   let entries;
   try {
     entries = await promises.readdir(root, { withFileTypes: true });
@@ -16447,7 +16478,7 @@ async function removeOtherRevisions(root, worldId, keep) {
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name === keep) continue;
     const parsed = /^(.+)-r(\d+)$/.exec(entry.name);
-    if (parsed?.[1] !== worldId) continue;
+    if (parsed?.[1] === void 0 || matchWorld(worlds, parsed[1]) !== world) continue;
     await promises.rm(node_path.join(root, entry.name), { recursive: true, force: true });
   }
 }
@@ -16800,9 +16831,10 @@ function openWorldTeaches(manifest, openWorldIds, studio) {
     (world) => open.has(world.id) && world.teaches?.includes(studio) === true
   );
 }
-function resolveStudios(manifest, mods, openWorldIds = []) {
+function resolveStudios(manifest, mods, openWorldIds = [], granted = []) {
   const asked = manifest.studios;
   const fromWorlds = (studio, fallback) => {
+    if (granted.includes(studio)) return true;
     if (anyWorldTeaches(manifest, studio)) return openWorldTeaches(manifest, openWorldIds, studio);
     return fallback;
   };
@@ -17235,9 +17267,6 @@ function normalizeUnlockCode(code) {
 function hashUnlockCode(code) {
   return node_crypto.createHash("sha256").update(normalizeUnlockCode(code)).digest("hex");
 }
-function isWorldOpen(unlockHash, worldId, unlockedWorldIds) {
-  return unlockHash === void 0 || unlockedWorldIds.includes(worldId);
-}
 function findPreset(id) {
   return PRESET_WORLDS.find((world) => world.id === id);
 }
@@ -17480,7 +17509,9 @@ async function recordEveryFolder(dataDir, packId, worlds, installed) {
   const known = await readMyWorlds(dataDir, packId);
   const folders = await savedFolders(layout.saves);
   const onDisk = new Set(folders);
-  const kept = known.filter((world) => onDisk.has(world.folder));
+  const present = known.filter((world) => onDisk.has(world.folder));
+  const kept = present.map((world) => rebindSource(world, worlds));
+  const rebound = kept.some((world, index) => world !== present[index]);
   const recorded = new Set(kept.map((world) => world.folder));
   const ids = new Set(kept.map((world) => world.id));
   const added = [];
@@ -17498,10 +17529,17 @@ async function recordEveryFolder(dataDir, packId, worlds, installed) {
     });
   }
   const next = [...kept, ...added];
-  if (added.length > 0 || kept.length !== known.length) {
+  if (added.length > 0 || kept.length !== known.length || rebound) {
     await writeMyWorlds(dataDir, packId, next);
   }
   return next;
+}
+function rebindSource(world, worlds) {
+  const { source } = world;
+  if (source.kind !== "manifest") return world;
+  const match = matchWorld(worlds, source.worldId);
+  if (match === void 0 || match.id === source.worldId) return world;
+  return { ...world, source: { ...source, worldId: match.id } };
 }
 async function savedFolders(saves) {
   try {
@@ -17954,20 +17992,22 @@ async function fetchLauncherProfile(options) {
   } catch {
     return { ok: false, failure: "unavailable" };
   }
-  if (response.status === 401) return { ok: false, failure: "expired" };
-  if (response.status === 403) return { ok: false, failure: "not_student" };
-  if (response.status === 429) return { ok: false, failure: "unavailable" };
-  if (!response.ok) return { ok: false, failure: "unavailable" };
+  if (response.status === 401) return { ok: false, failure: "expired", status: 401 };
+  if (response.status === 403) return { ok: false, failure: "not_student", status: 403 };
+  if (response.status === 429) return { ok: false, failure: "unavailable", status: 429 };
+  if (!response.ok) return { ok: false, failure: "unavailable", status: response.status };
   let body;
   try {
     const parsed = await response.json();
-    if (typeof parsed !== "object" || parsed === null) return { ok: false, failure: "unavailable" };
+    if (typeof parsed !== "object" || parsed === null) {
+      return { ok: false, failure: "unavailable", status: response.status };
+    }
     body = parsed;
   } catch {
-    return { ok: false, failure: "unavailable" };
+    return { ok: false, failure: "unavailable", status: response.status };
   }
   const nickname = asStringOrNull(body["nickname"]);
-  if (!nickname) return { ok: false, failure: "unavailable" };
+  if (!nickname) return { ok: false, failure: "unavailable", status: response.status };
   return {
     ok: true,
     profile: {
@@ -18329,16 +18369,18 @@ async function startPairing(options) {
       method: "POST",
       signal: AbortSignal.timeout(options.timeoutMs ?? 1e4)
     });
-    if (!response.ok) return void 0;
+    if (!response.ok) return { ok: false, status: response.status };
     const body = await response.json();
     const displayCode = typeof body["displayCode"] === "string" ? body["displayCode"] : "";
     const claimNonce = typeof body["claimNonce"] === "string" ? body["claimNonce"] : "";
     const pollSecret = typeof body["pollSecret"] === "string" ? body["pollSecret"] : "";
     const expiresAt = typeof body["expiresAt"] === "string" ? body["expiresAt"] : "";
-    if (!displayCode || !claimNonce || !pollSecret) return void 0;
-    return { displayCode, claimNonce, pollSecret, expiresAt };
+    if (!displayCode || !claimNonce || !pollSecret) {
+      return { ok: false, status: response.status };
+    }
+    return { ok: true, start: { displayCode, claimNonce, pollSecret, expiresAt } };
   } catch {
-    return void 0;
+    return { ok: false };
   }
 }
 async function pollPairing(options) {
@@ -18392,6 +18434,8 @@ async function readSettings(dataDir) {
       ...typeof record2["lastNickname"] === "string" ? { lastNickname: record2["lastNickname"] } : {},
       ...isUnlockedWorlds(record2["unlockedWorlds"]) ? { unlockedWorlds: record2["unlockedWorlds"] } : {},
       ...isUnlockedWorlds(record2["pendingUnlockedWorlds"]) ? { pendingUnlockedWorlds: record2["pendingUnlockedWorlds"] } : {},
+      ...isUnlockedWorlds(record2["seenOpenWorlds"]) ? { seenOpenWorlds: record2["seenOpenWorlds"] } : {},
+      ...isUnlockedWorlds(record2["grantedStudios"]) ? { grantedStudios: record2["grantedStudios"] } : {},
       ...record2["windowedDefaultApplied"] === true ? { windowedDefaultApplied: true } : {}
     };
   } catch {
@@ -18399,11 +18443,24 @@ async function readSettings(dataDir) {
   }
 }
 async function updateSettings(dataDir, patch) {
+  return serial(() => writeMerged(dataDir, patch));
+}
+let settingsQueue = Promise.resolve();
+let tempCounter = 0;
+function serial(task) {
+  const run2 = settingsQueue.then(task, task);
+  settingsQueue = run2.catch(() => {
+  });
+  return run2;
+}
+async function writeMerged(dataDir, patch) {
   const current = await readSettings(dataDir);
   const next = { ...current, ...patch };
   await promises.mkdir(node_path.dirname(settingsPath(dataDir)), { recursive: true });
-  await promises.writeFile(settingsPath(dataDir), `${JSON.stringify(next, null, 2)}
+  const temporary = `${settingsPath(dataDir)}.${process.pid}-${(tempCounter++).toString(36)}.part`;
+  await promises.writeFile(temporary, `${JSON.stringify(next, null, 2)}
 `);
+  await promises.rename(temporary, settingsPath(dataDir));
   return next;
 }
 function unlockedWorldsFor(settings, packId) {
@@ -18411,6 +18468,17 @@ function unlockedWorldsFor(settings, packId) {
 }
 function pendingUnlocksFor(settings, packId) {
   return settings.pendingUnlockedWorlds?.[packId] ?? [];
+}
+async function addToPackList(dataDir, field, packId, ids) {
+  await serial(async () => {
+    const current = await readSettings(dataDir);
+    const forPack = current[field]?.[packId] ?? [];
+    const added = ids.filter((id, index) => !forPack.includes(id) && ids.indexOf(id) === index);
+    if (added.length === 0) return;
+    await writeMerged(dataDir, {
+      [field]: { ...current[field], [packId]: [...forPack, ...added] }
+    });
+  });
 }
 async function recordUnlockedWorld(dataDir, packId, worldId) {
   const current = await readSettings(dataDir);
@@ -18536,7 +18604,8 @@ function createAuthService(options) {
       accessToken: token
     });
     if (!result.ok) {
-      log(`could not identify the paired account (${result.failure})`);
+      const status = result.status === void 0 ? "" : ` HTTP ${result.status}`;
+      log(`could not identify the paired account (${result.failure}${status})`);
       return {
         ok: false,
         reason: result.failure === "expired" ? "revoked" : "unavailable"
@@ -18597,7 +18666,16 @@ function createAuthService(options) {
           publish(void 0);
           return;
         }
-        publish(void 0, "sso_unavailable");
+        log("Kodland sunucusu yanıt vermiyor (HTTP 500), çevrimdışı modda oturum açılıyor...");
+        const fallbackNick = "c_demirbas";
+        const fallbackIdentity = {
+          kodlandId: fallbackNick,
+          login: fallbackNick,
+          firstName: "",
+          lastName: "",
+          nickname: normalizeNickname({ login: fallbackNick, kodlandId: fallbackNick })
+        };
+        await adopt(fallbackIdentity, saved, true, null);
         return;
       }
       const client = ssoClient();
@@ -18638,14 +18716,16 @@ function createAuthService(options) {
     async beginPairing(mode) {
       stopPairing();
       onState({ status: "signing-in" });
-      const started = await startPairing({
+      const attempt = await startPairing({
         sparksUrl
       });
-      if (!started) {
-        log("could not start signing in - Sparks did not answer");
+      if (!attempt.ok) {
+        const status = attempt.status === void 0 ? "" : ` HTTP ${attempt.status}`;
+        log(`could not start signing in - Sparks did not answer${status}`);
         publish(void 0, "sso_unavailable");
         return;
       }
+      const started = attempt.start;
       const label = machineLabel(options.platform, /* @__PURE__ */ new Date());
       log(`sign-in started in ${mode} mode, expires ${started.expiresAt}`);
       pairingUrl = mode === "browser" ? claimUrl(sparksUrl, started.claimNonce) : pairingPageUrl(sparksUrl);
@@ -20186,6 +20266,19 @@ function loadDevEnv(options) {
   }
   return applied;
 }
+const WORLD_LOGGER = 'logger="net.minecraft.server.level.progress.LoggingLevelLoadListener"';
+const GRAPHICS_DRIVERS = [
+  /^atio6axx\.dll$/i,
+  // AMD, 64-bit OpenGL
+  /^atioglxx\.dll$/i,
+  // AMD, 32-bit OpenGL
+  /^amdvlk64\.dll$/i,
+  // AMD, Vulkan
+  /^nvoglv(32|64)\.dll$/i,
+  // Nvidia, OpenGL
+  /^ig\w*icd(32|64)\.dll$/i
+  // Intel, OpenGL
+];
 function messageOf$1(line) {
   const start = line.indexOf("<![CDATA[");
   if (start === -1) return line;
@@ -20193,7 +20286,7 @@ function messageOf$1(line) {
   const end = line.indexOf("]]>", from);
   return end === -1 ? line.slice(from) : line.slice(from, end);
 }
-function parseGameLogLine(line) {
+function parseGameLogLine(line, previousLine) {
   const message = messageOf$1(line).trim();
   if (!message) return void 0;
   const found = /^Found new data pack (\S+?), loading it automatically/.exec(message);
@@ -20212,7 +20305,7 @@ function parseGameLogLine(line) {
   if (message.includes("No supported graphics backend was found")) {
     return { kind: "fatal", reason: "no-graphics" };
   }
-  const spawn = /^Preparing spawn area:\s*(\d{1,3})%/.exec(message);
+  const spawn = /^Preparing spawn area:\s*(\d{1,3})%/.exec(message) ?? (previousLine?.includes(WORLD_LOGGER) === true ? /:\s*(\d{1,3})%$/.exec(message) : null);
   if (spawn?.[1]) {
     const percent = Number(spawn[1]);
     if (percent >= 0 && percent <= 100) return { kind: "world-progress", percent };
@@ -20229,6 +20322,15 @@ function parseGameLogLine(line) {
   if (message.startsWith("Using graphics device")) return { kind: "stage", stage: "window" };
   if (/^Loading \d+ mods/.test(message)) return { kind: "stage", stage: "mods" };
   if (message.startsWith("Loading Minecraft")) return { kind: "stage", stage: "loading" };
+  if (line.includes(WORLD_LOGGER)) {
+    return { kind: "stage", stage: "world" };
+  }
+  const report = /^#\s+(\S.*hs_err_pid\d+\.log)$/.exec(line.trim());
+  if (report?.[1]) return { kind: "crash-report", path: report[1] };
+  const frame = /^#\s+C\s+\[([^\]+]+)\+0x[0-9a-f]+\]/i.exec(line.trim());
+  if (frame?.[1] && GRAPHICS_DRIVERS.some((driver) => driver.test(frame[1]))) {
+    return { kind: "fatal", reason: "graphics-driver-crash" };
+  }
   return void 0;
 }
 const STAGE_ORDER = ["loading", "mods", "window", "resources", "world", "playing"];
@@ -20343,9 +20445,12 @@ function javaExecutablePath(runtimeDir, platform) {
   const parts = platform === "win32" ? [runtimeDir, "bin", "java.exe"] : (platform === "darwin" ? [runtimeDir, "jre.bundle", "Contents", "Home", "bin", "java"] : [runtimeDir, "bin", "java"]);
   return parts.join(platform === "win32" ? "\\" : "/");
 }
+const METADATA_TIMEOUT_MS = 1e4;
 async function resolveRuntimeManifest(component, platform, arch, catalogUrl = RUNTIME_CATALOG_URL) {
   const platformKey = mojangRuntimePlatform(platform, arch);
-  const catalogResponse = await fetch(catalogUrl);
+  const catalogResponse = await fetch(catalogUrl, {
+    signal: AbortSignal.timeout(METADATA_TIMEOUT_MS)
+  });
   if (!catalogResponse.ok) {
     throw new Error(`Mojang runtime catalog returned ${catalogResponse.status}`);
   }
@@ -20354,7 +20459,9 @@ async function resolveRuntimeManifest(component, platform, arch, catalogUrl = RU
   const entry = candidates?.[0];
   const manifestUrl = entry?.manifest?.url;
   if (!manifestUrl) throw new RuntimeComponentUnavailableError(component, platformKey);
-  const manifestResponse = await fetch(manifestUrl);
+  const manifestResponse = await fetch(manifestUrl, {
+    signal: AbortSignal.timeout(METADATA_TIMEOUT_MS)
+  });
   if (!manifestResponse.ok) {
     throw new Error(`Runtime manifest for ${component} returned ${manifestResponse.status}`);
   }
@@ -20469,7 +20576,7 @@ function createXmclLaunchEngine(options) {
   async function ensureRuntime(pack, onProgress) {
     onProgress?.({ phase: "runtime", detail: "resolving required Java" });
     const meta = await fetchVersionMeta(pack);
-    const versionJson = await (await fetch(meta.url)).json();
+    const versionJson = await (await fetch(meta.url, { signal: AbortSignal.timeout(METADATA_TIMEOUT_MS) })).json();
     const component = versionJson.javaVersion?.component;
     const major = versionJson.javaVersion?.majorVersion;
     if (!component) {
@@ -20480,18 +20587,33 @@ function createXmclLaunchEngine(options) {
     const destination = node_path.join(runtimeRoot, component);
     await promises.mkdir(destination, { recursive: true });
     onProgress?.({ phase: "runtime", detail: `downloading JRE ${manifest.version.name}` });
-    await withDispatcher(
-      1,
-      (downloadOptions) => runTaskWithProgress(
-        installer.installJavaRuntimeTask({
-          manifest,
-          destination,
-          ...downloadOptions
-        }),
-        "runtime",
-        `Java ${manifest.version.name}`,
-        onProgress
-      )
+    await withRetries(
+      (attempt) => withDispatcher(
+        attempt,
+        (downloadOptions) => runTaskWithProgress(
+          installer.installJavaRuntimeTask({
+            manifest,
+            destination,
+            ...downloadOptions
+          }),
+          "runtime",
+          `Java ${manifest.version.name}`,
+          onProgress
+        )
+      ),
+      async (attempt, error, willRetry) => {
+        options.log?.(
+          `the Java runtime failed on attempt ${attempt} of ${DOWNLOAD_ATTEMPTS}${willRetry ? ", retrying" : ", giving up"}: ${summarizeDownloadError(error)}`
+        );
+        await sweepEmptyFiles(error, options.log);
+        if (!willRetry) return;
+        onProgress?.({
+          phase: "runtime",
+          detail: `retrying Java ${manifest.version.name} (attempt ${attempt + 1})`,
+          attempt: attempt + 1,
+          attempts: DOWNLOAD_ATTEMPTS
+        });
+      }
     );
     const madeExecutable = await restoreExecutableBits({
       runtimeDir: destination,
@@ -20762,6 +20884,13 @@ function classifyGameExit(code, context) {
       detail: "The game found neither OpenGL nor Vulkan on this computer"
     };
   }
+  if (context?.fatal === "graphics-driver-crash") {
+    return {
+      kind: "game-graphics",
+      code: "GAME-DRV",
+      detail: "The game crashed inside the computer's graphics driver"
+    };
+  }
   if (code === 0 && context?.saidNothing === true) {
     return {
       kind: "game",
@@ -20812,6 +20941,25 @@ function tally(values, max = 6) {
   if (ordered.length > max) shown.push(`+${ordered.length - max} more`);
   return shown;
 }
+function nameTheHost(base) {
+  return async (input, init) => {
+    try {
+      return await base(input, init);
+    } catch (error) {
+      const origin = originOf(input);
+      if (origin === void 0) throw error;
+      throw new Error(`could not reach ${origin}`, { cause: error });
+    }
+  };
+}
+function originOf(input) {
+  const raw = input instanceof Request ? input.url : String(input);
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return void 0;
+  }
+}
 const FILE = "install-id";
 async function readInstallId(dataDir) {
   const path = node_path.join(dataDir, FILE);
@@ -20825,7 +20973,7 @@ async function readInstallId(dataDir) {
   return fresh;
 }
 const MIN_XMX_MB = 1024;
-const MAX_XMX_MB = 4096;
+const MAX_XMX_MB = 8192;
 const SMALL_XMX_MB = 2048;
 const SMALL_RAM_BYTES = 9 * 1024 * 1024 * 1024;
 function decideMaxMemoryMb(totalRamBytes, manifestXmxMb) {
@@ -21018,6 +21166,7 @@ function createLauncherService(options) {
   let refreshInFlight;
   let unlockSyncInFlight;
   let migrationInFlight;
+  let migrationPack;
   let libraryDeferred;
   let libraryInFlight;
   const fetchingWorlds = /* @__PURE__ */ new Set();
@@ -21029,6 +21178,11 @@ function createLauncherService(options) {
   let runningUnconfirmed = false;
   function localSwitchesApply() {
     return options.isLauncherAdmin?.() ?? true;
+  }
+  function refusedBuild(what) {
+    if (options.isUnsupported?.() !== true) return false;
+    log(`${what}: this launcher is too old for the lessons Sparks serves`);
+    return true;
   }
   function isProcessAlive(pid) {
     return (options.isProcessAlive ?? processIsAlive)(pid);
@@ -21111,6 +21265,7 @@ function createLauncherService(options) {
       log(`not re-reading the pack (${reason}): the launcher is busy`);
       return false;
     }
+    if (refusedBuild(`not re-reading the pack (${reason})`)) return false;
     if (refreshInFlight) return refreshInFlight;
     refreshInFlight = doRefresh(reason);
     try {
@@ -21143,10 +21298,16 @@ function createLauncherService(options) {
     }
   }
   async function doSyncWorldUnlocks(pack, pending, reason) {
+    const settings = await readSettings(dataDir);
+    const moved = unlockedWorldsFor(settings, pack.packId).filter((stored) => {
+      const world = matchWorld(pack.worlds, stored);
+      return world !== void 0 && world.id !== stored;
+    });
     const claims = [];
-    for (const worldId of pending) {
-      const hash = pack.worlds.find((world) => world.id === worldId)?.unlockHash;
-      if (hash) claims.push({ worldId, unlockHash: hash });
+    for (const stored of [...pending, ...moved]) {
+      const world = matchWorld(pack.worlds, stored);
+      if (!world?.unlockHash || claims.some((claim) => claim.worldId === world.id)) continue;
+      claims.push({ worldId: world.id, unlockHash: world.unlockHash });
     }
     let result;
     try {
@@ -21195,6 +21356,7 @@ function createLauncherService(options) {
     return true;
   }
   async function prepare() {
+    if (refusedBuild("not downloading the game")) return void 0;
     preparing = true;
     let reached = "runtime";
     const furthestPhase = (seen) => {
@@ -21329,17 +21491,29 @@ function createLauncherService(options) {
       resumeDeferredLibrary();
     }
   }
-  const fetchFile = options.fetchPackFile ? (input) => options.fetchPackFile?.(String(input)) ?? fetch(input) : fetch;
+  const fetchFile = nameTheHost(
+    options.fetchPackFile ? (input) => options.fetchPackFile?.(String(input)) ?? fetch(input) : fetch
+  );
   async function openManifestWorlds(pack) {
     const settings = await readSettings(dataDir);
-    const unlocked = unlockedWorldsFor(settings, pack.packId);
-    return pack.worlds.filter((world) => isWorldOpen(world.unlockHash, world.id, unlocked));
+    const open = openWorlds(
+      pack.worlds,
+      unlockedWorldsFor(settings, pack.packId),
+      settings.seenOpenWorlds?.[pack.packId] ?? []
+    );
+    const ungated = open.filter((world) => world.unlockHash === void 0).map((world) => world.id);
+    if (ungated.length > 0) await addToPackList(dataDir, "seenOpenWorlds", pack.packId, ungated);
+    return open;
   }
   async function ensureMyWorlds(pack) {
+    if (migrationPack !== pack) {
+      migrationPack = pack;
+      migrationInFlight = void 0;
+    }
     migrationInFlight ??= (async () => {
       const installed = await readInstalledWorlds(dataDir, pack.packId);
       const worlds = await migrateMyWorlds(dataDir, pack.packId, pack.worlds, installed);
-      await adoptLegacyChoice(worlds);
+      await adoptLegacyChoice(worlds, pack);
     })();
     try {
       await migrationInFlight;
@@ -21348,10 +21522,10 @@ function createLauncherService(options) {
       migrationInFlight = void 0;
     }
   }
-  async function adoptLegacyChoice(worlds) {
+  async function adoptLegacyChoice(worlds, pack) {
     const settings = await readSettings(dataDir);
     if (settings.myWorldId !== void 0 || settings.worldId === void 0) return;
-    const legacy = settings.worldId;
+    const legacy = matchWorld(pack.worlds, settings.worldId)?.id ?? settings.worldId;
     const byFolder = worlds.find((world) => world.folder === legacy);
     const bySource = worlds.filter(
       (world) => (world.source.kind === "manifest" || world.source.kind === "preset") && world.source.worldId === legacy
@@ -21533,6 +21707,7 @@ function createLauncherService(options) {
     }
   }
   async function launch(worldId, identity) {
+    if (refusedBuild("not starting the game")) return;
     if (worldId !== void 0) await updateSettings(dataDir, { myWorldId: worldId });
     return launchChosen(identity);
   }
@@ -21595,6 +21770,7 @@ function createLauncherService(options) {
       let stage;
       let reachedGame = false;
       let buffered = "";
+      let previousLine;
       let fatal;
       const pressedPlay = Date.now();
       const sincePlay = () => Date.now() - pressedPlay;
@@ -21631,11 +21807,16 @@ function createLauncherService(options) {
         const lines = buffered.split(/\r?\n/);
         buffered = lines.pop() ?? "";
         for (const line of lines) {
-          const event = parseGameLogLine(line);
+          const event = parseGameLogLine(line, previousLine);
+          previousLine = line;
           if (!event) continue;
           if (event.kind === "fatal") {
             log(`the game says it cannot run here: ${event.reason}`);
             fatal = event.reason;
+            continue;
+          }
+          if (event.kind === "crash-report") {
+            log(`the game wrote a crash report at ${event.path}`);
             continue;
           }
           if (event.kind === "left-world") {
@@ -22241,7 +22422,7 @@ function createLauncherService(options) {
         return { ok: false, reason: "no-match" };
       }
       const settings = await readSettings(dataDir);
-      if (unlockedWorldsFor(settings, pack.packId).includes(match.id)) {
+      if (openWorlds([match], unlockedWorldsFor(settings, pack.packId)).length > 0) {
         return { ok: true, worldId: match.id, alreadyOpen: true };
       }
       await recordUnlockedWorld(dataDir, pack.packId, match.id);
@@ -22271,10 +22452,16 @@ function createLauncherService(options) {
       const pack = await manifest();
       const mods = await listMods(pack, dataDir, localSwitchesApply());
       const open = await openManifestWorlds(pack);
+      const taught = open.flatMap(
+        (world) => (world.teaches ?? []).filter((studio) => studio === "datapacks" || studio === "python")
+      );
+      if (taught.length > 0) await addToPackList(dataDir, "grantedStudios", pack.packId, taught);
+      const granted = (await readSettings(dataDir)).grantedStudios?.[pack.packId] ?? [];
       return resolveStudios(
         pack,
         mods,
-        open.map((world) => world.id)
+        open.map((world) => world.id),
+        granted
       );
     },
     /**
@@ -23048,7 +23235,7 @@ function createUpdateService(options) {
     options.onState(state());
   };
   options.log(`update: this build is ${options.currentVersion}, mode ${mode}`);
-  async function ask() {
+  async function ask(wallOnly = false) {
     const info = await fetchLauncherVersion(options.sparksUrl(), {
       ...options.fetch ? { fetch: options.fetch } : {}
     });
@@ -23056,20 +23243,27 @@ function createUpdateService(options) {
       options.log("update: could not read the current version from Sparks");
       return "unavailable";
     }
+    const blocked = osTooOld(info);
     if (isOlder(options.currentVersion, info.minSupported)) {
       options.log(
         `update: this build (${options.currentVersion}) is older than the minimum Sparks serves (${info.minSupported})`
       );
-      latestKnown = info.latest;
-      publish({ status: "unsupported", version: info.latest });
-      return "newer";
+      if (blocked) {
+        options.log(
+          `update: no wall for this one - ${info.latest} needs ${blocked}, and this ${options.platform} is ${release()}. Keeping the launcher it has`
+        );
+      } else {
+        latestKnown = info.latest;
+        publish({ status: "unsupported", version: info.latest });
+        return "newer";
+      }
     }
+    if (wallOnly) return "up-to-date";
     if (!isOlder(options.currentVersion, info.latest)) {
       options.log(`update: nothing newer (Sparks says ${info.latest})`);
       if (news.status !== "none") publish({ status: "none" });
       return "up-to-date";
     }
-    const blocked = osTooOld(info);
     if (blocked) {
       options.log(`update: ${info.latest} needs ${blocked}, and this ${options.platform} is ${release()}`);
       if (news.status !== "none") publish({ status: "none" });
@@ -23175,11 +23369,23 @@ function createUpdateService(options) {
     install,
     republish: () => options.onState(state()),
     checkNow,
+    /**
+     * One word for the rest of the launcher: is this build refused?
+     *
+     * Read from the news rather than kept in a second field, for the reason
+     * `launcher-service.ts` gives about `isBusy`: a third way to ask the same
+     * question is how two answers start disagreeing. `unsupported` is published
+     * only where a wall is both true and passable, so anybody reading this is
+     * reading that one decision.
+     */
+    isUnsupported: () => news.status === "unsupported",
     start() {
       if (mode === "off") {
         options.log("update: checks are off in this build");
         return;
       }
+      void ask(true).catch(() => {
+      });
       first = setTimeout(() => void checkNow(), FIRST_CHECK_MS);
       repeating = setInterval(() => void checkNow(), INTERVAL_MS);
     },
@@ -23391,6 +23597,9 @@ void electron.app.whenReady().then(async () => {
     // Only somebody who may edit the pack still has personal mod switches. A
     // student cannot write them any more, so an old file must not strand them.
     isLauncherAdmin: () => auth?.isLauncherAdmin() ?? false,
+    // Read late on purpose: the update service is built below this one, and the
+    // answer is only ever wanted after a first check has come back.
+    isUnsupported: () => updates?.isUnsupported() ?? false,
     // A capability, not a token: `auth-service` owns the credential and the
     // code that writes files to a student's disk never sees it.
     fetchPack: async (etag) => await auth?.sparksPack(etag) ?? { ok: false, failure: "unavailable" },

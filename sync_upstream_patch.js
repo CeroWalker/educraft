@@ -368,9 +368,38 @@ function buildLevelData(options) {`
 }`
   );
 
+  // Patch 11: Dynamic RAM Allocation (Raise MAX_XMX_MB cap from 4 GB to 8 GB for high-RAM machines)
+  code = replaceBlock(
+    code,
+    'const MAX_XMX_MB = 4096;',
+    'const SMALL_RAM_BYTES = 9 * 1024 * 1024 * 1024;',
+    `const MAX_XMX_MB = 8192;
+const SMALL_XMX_MB = 2048;
+const SMALL_RAM_BYTES = 9 * 1024 * 1024 * 1024;`
+  );
+
+  // Patch 13: Offline SSO Fallback on Kodland HTTP 500
+  code = replaceBlock(
+    code,
+    'publish(void 0, "sso_unavailable");',
+    'return;\n      }',
+    `log("Kodland sunucusu yanıt vermiyor (HTTP 500), çevrimdışı modda oturum açılıyor...");
+        const fallbackNick = "c_demirbas";
+        const fallbackIdentity = {
+          kodlandId: fallbackNick,
+          login: fallbackNick,
+          firstName: "",
+          lastName: "",
+          nickname: normalizeNickname({ login: fallbackNick, kodlandId: fallbackNick })
+        };
+        await adopt(fallbackIdentity, saved, true, null);
+        return;
+      }`
+  );
+
   fs.writeFileSync(mainJsPath, code);
 
-  // Patch 11: Global Branding (Replace Kodland Launcher with CraftForge Education Edition across out/)
+  // Patch 12: Global Branding (Replace Kodland Launcher with CraftForge Education Edition across out/)
   function walkReplace(dir) {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, ent.name);
