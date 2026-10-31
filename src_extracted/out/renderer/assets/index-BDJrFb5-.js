@@ -12466,7 +12466,7 @@ function resolveLocale(tag) {
   if (language2 && isLocale(language2)) return language2;
   return FALLBACK_LOCALE;
 }
-const app$8 = { "name": "CraftForge Education Edition" };
+const app$8 = { "name": "Kodland Launcher" };
 const appUpdate$8 = { "versionLabel": "الإصدار {version}", "check": "تحقّق", "checkFull": "تحقّق من التحديثات", "checking": "جارٍ التحقق…", "upToDate": "لديك أحدث نسخة", "checkFailed": "لم نتمكّن من التحقق. جرّب لاحقًا.", "osTooOld": "هذا الحاسوب لا يشغّل نسخة أحدث. تابع اللعب بهذه.", "downloading": "نحمّل النسخة الجديدة", "comingSoon": "النسخة الجديدة في الطريق", "available": "توجد نسخة أحدث", "readyToInstall": "النسخة الجديدة جاهزة", "install": "ثبّت", "restartQuestion": "سيُغلق البرنامج ثم يُفتح من جديد.", "cancel": "إلغاء", "notNow": "ليس الآن. أغلق اللعبة أو انتظر انتهاء التحميل.", "unsupported": "التحديث مطلوب", "unsupportedWhy": "هذه النسخة قديمة جدًا على دروس اليوم. نزّل الجديدة لتتابع اللعب.", "get": "نزّل الجديدة" };
 const language$8 = { "label": "اللغة" };
 const signIn$8 = { "title": "هل أنت مستعد للعب؟", "body": "اضغط الزر وأكّد في المتصفّح. لا حاجة لكتابة كلمة السر.", "action": "دخول", "working": "نفتح المتصفّح…", "useCode": "المتصفّح لا يُفتح؟ ادخل برمز", "error": { "invalid_credentials": "لم يسمح لنا Kodland بالدخول. سجّل الدخول أولًا في learn.kodland.org ثم اضغط الزر مرة أخرى.", "not_student": "هذا ليس حساب طالب، لذا لا يمكن تشغيل اللعبة منه. اسأل معلّمك.", "sso_expired": "عليك الدخول مرة أخرى.", "sso_unavailable": "لم نتمكّن من الوصول إلى Kodland. تحقّق من الإنترنت وحاول مرة أخرى — الأمر ليس في كلمة السر." } };
@@ -12520,7 +12520,7 @@ const ar = {
   tabs: tabs$8,
   error: error$8
 };
-const app$7 = { "name": "CraftForge Education Edition" };
+const app$7 = { "name": "Kodland Launcher" };
 const appUpdate$7 = { "versionLabel": "Version {version}", "check": "Check", "checkFull": "Check for updates", "checking": "Checking…", "upToDate": "You have the newest launcher", "checkFailed": "Could not check. Try later.", "osTooOld": "This computer cannot run a newer launcher. Keep playing on this one.", "downloading": "Getting a newer launcher", "comingSoon": "A newer launcher is on the way", "available": "There is a newer launcher", "readyToInstall": "A newer launcher is ready", "install": "Install", "restartQuestion": "The launcher will close and open again.", "cancel": "Cancel", "notNow": "Not right now. Close the game or wait for the download to finish.", "unsupported": "Update needed", "unsupportedWhy": "This launcher is too old for today's lessons. Get the new one to keep playing.", "get": "Get the new one" };
 const language$7 = { "label": "Language" };
 const signIn$7 = { "title": "Ready to play?", "body": "Press the button and confirm it in your browser. There is no password to type.", "action": "Sign in", "working": "Opening the browser…", "useCode": "The browser will not open? Use a code instead", "error": { "invalid_credentials": "Kodland did not let us in. Sign in at learn.kodland.org first, then press the button again.", "not_student": "This account is not a student account, so the game cannot start from it. Ask your teacher.", "sso_expired": "You need to sign in again.", "sso_unavailable": "We could not reach Kodland. Check the internet and try again — this is not about your password." } };
@@ -12574,7 +12574,7 @@ const en = {
   tabs: tabs$7,
   error: error$7
 };
-const app$6 = { "name": "CraftForge Education Edition" };
+const app$6 = { "name": "Kodland Launcher" };
 const appUpdate$6 = { "versionLabel": "Versión {version}", "check": "Comprobar", "checkFull": "Comprobar actualizaciones", "checking": "Comprobando…", "upToDate": "Tienes el lanzador más nuevo", "checkFailed": "No se pudo comprobar. Inténtalo luego.", "osTooOld": "Este ordenador no puede usar un lanzador más nuevo. Sigue jugando con este.", "downloading": "Bajando el lanzador nuevo", "comingSoon": "El lanzador nuevo está en camino", "available": "Hay un lanzador más nuevo", "readyToInstall": "El lanzador nuevo está listo", "install": "Instalar", "restartQuestion": "El lanzador se cerrará y se abrirá de nuevo.", "cancel": "Cancelar", "notNow": "Ahora no. Cierra el juego o espera a que termine la descarga.", "unsupported": "Hace falta actualizar", "unsupportedWhy": "Este lanzador es muy antiguo para las clases de hoy. Descarga el nuevo para seguir jugando.", "get": "Descargar el nuevo" };
 const language$6 = { "label": "Idioma" };
 const signIn$6 = { "title": "¿Listo para jugar?", "body": "Pulsa el botón y confírmalo en el navegador. No hay contraseña que escribir.", "action": "Entrar", "working": "Abriendo el navegador…", "useCode": "¿No se abre el navegador? Entra con un código", "error": { "invalid_credentials": "Kodland no nos ha dejado entrar. Entra primero en learn.kodland.org y pulsa el botón otra vez.", "not_student": "Esta cuenta no es de alumno, así que el juego no puede abrirse con ella. Pregunta a tu profe.", "sso_expired": "Tienes que entrar de nuevo.", "sso_unavailable": "No pudimos conectar con Kodland. Comprueba internet y vuelve a intentarlo: no es tu contraseña." } };
@@ -12628,7 +12628,7 @@ const es = {
   tabs: tabs$6,
   error: error$6
 };
-const app$5 = { "name": "CraftForge Education Edition" };
+const app$5 = { "name": "Kodland Launcher" };
 const appUpdate$5 = { "versionLabel": "Versi {version}", "check": "Periksa", "checkFull": "Periksa pembaruan", "checking": "Memeriksa…", "upToDate": "Peluncurmu sudah yang terbaru", "checkFailed": "Tidak bisa memeriksa. Coba lagi nanti.", "osTooOld": "Komputer ini tidak bisa menjalankan peluncur yang lebih baru. Lanjut bermain dengan ini.", "downloading": "Mengunduh peluncur baru", "comingSoon": "Peluncur baru sedang dalam perjalanan", "available": "Ada peluncur yang lebih baru", "readyToInstall": "Peluncur baru sudah siap", "install": "Pasang", "restartQuestion": "Peluncur akan tertutup lalu terbuka lagi.", "cancel": "Batal", "notNow": "Belum bisa sekarang. Tutup gamenya atau tunggu unduhan selesai.", "unsupported": "Perlu diperbarui", "unsupportedWhy": "Peluncur ini terlalu lama untuk pelajaran hari ini. Unduh yang baru supaya bisa main lagi.", "get": "Unduh yang baru" };
 const language$5 = { "label": "Bahasa" };
 const signIn$5 = { "title": "Siap bermain?", "body": "Tekan tombolnya lalu konfirmasi di browser. Tidak ada kata sandi untuk diketik.", "action": "Masuk", "working": "Membuka browser…", "useCode": "Browser tidak terbuka? Masuk pakai kode", "error": { "invalid_credentials": "Kodland tidak mengizinkan. Masuk dulu di learn.kodland.org, lalu tekan tombolnya lagi.", "not_student": "Akun ini bukan akun murid, jadi gamenya tidak bisa dibuka. Tanya gurumu.", "sso_expired": "Kamu perlu masuk lagi.", "sso_unavailable": "Kami tidak bisa menghubungi Kodland. Periksa internet lalu coba lagi — ini bukan soal kata sandimu." } };
@@ -12682,7 +12682,7 @@ const id = {
   tabs: tabs$5,
   error: error$5
 };
-const app$4 = { "name": "CraftForge Education Edition" };
+const app$4 = { "name": "Kodland Launcher" };
 const appUpdate$4 = { "versionLabel": "Versione {version}", "check": "Controlla", "checkFull": "Controlla gli aggiornamenti", "checking": "Controlliamo…", "upToDate": "Hai il launcher più nuovo", "checkFailed": "Non siamo riusciti a controllare. Riprova più tardi.", "osTooOld": "Questo computer non può usare un launcher più nuovo. Continua a giocare con questo.", "downloading": "Scarichiamo il launcher nuovo", "comingSoon": "Il nuovo launcher sta arrivando", "available": "C'è un launcher più nuovo", "readyToInstall": "Il nuovo launcher è pronto", "install": "Installa", "restartQuestion": "Il launcher si chiude e si riapre.", "cancel": "Annulla", "notNow": "Non adesso. Chiudi il gioco o aspetta la fine del download.", "unsupported": "Serve un aggiornamento", "unsupportedWhy": "Questo launcher è troppo vecchio per le lezioni di oggi. Scarica quello nuovo per continuare a giocare.", "get": "Scarica quello nuovo" };
 const language$4 = { "label": "Lingua" };
 const signIn$4 = { "title": "Pronto a giocare?", "body": "Premi il pulsante e confermalo nel browser. Nessuna password da scrivere.", "action": "Accedi", "working": "Apriamo il browser…", "useCode": "Il browser non si apre? Accedi con un codice", "error": { "invalid_credentials": "Kodland non ci ha fatti entrare. Accedi prima su learn.kodland.org, poi premi di nuovo il pulsante.", "not_student": "Questo non è un account da studente, quindi il gioco non può partire. Chiedi al tuo insegnante.", "sso_expired": "Devi accedere di nuovo.", "sso_unavailable": "Non siamo riusciti a raggiungere Kodland. Controlla internet e riprova: non è la password." } };
@@ -12736,7 +12736,7 @@ const it = {
   tabs: tabs$4,
   error: error$4
 };
-const app$3 = { "name": "CraftForge Education Edition" };
+const app$3 = { "name": "Kodland Launcher" };
 const appUpdate$3 = { "versionLabel": "Wersja {version}", "check": "Sprawdź", "checkFull": "Sprawdź aktualizacje", "checking": "Sprawdzamy…", "upToDate": "Masz najnowszy launcher", "checkFailed": "Nie udało się sprawdzić. Spróbuj później.", "osTooOld": "Ten komputer nie uruchomi nowszego launchera. Graj dalej na tym.", "downloading": "Pobieramy nowy launcher", "comingSoon": "Nowy launcher jest w drodze", "available": "Jest nowszy launcher", "readyToInstall": "Nowy launcher jest gotowy", "install": "Zainstaluj", "restartQuestion": "Launcher zamknie się i otworzy na nowo.", "cancel": "Anuluj", "notNow": "Teraz nie można. Zamknij grę albo poczekaj na koniec pobierania.", "unsupported": "Potrzebna aktualizacja", "unsupportedWhy": "Ten launcher jest za stary na dzisiejsze lekcje. Pobierz nowy, żeby grać dalej.", "get": "Pobierz nowy" };
 const language$3 = { "label": "Język" };
 const signIn$3 = { "title": "Gotowy do gry?", "body": "Naciśnij przycisk i potwierdź w przeglądarce. Nie musisz wpisywać hasła.", "action": "Zaloguj", "working": "Otwieramy przeglądarkę…", "useCode": "Przeglądarka się nie otwiera? Wejdź przez kod", "error": { "invalid_credentials": "Kodland nie wpuścił. Zaloguj się najpierw na learn.kodland.org, potem naciśnij przycisk jeszcze raz.", "not_student": "To nie jest konto ucznia, więc gra się z niego nie uruchomi. Zapytaj nauczyciela.", "sso_expired": "Musisz zalogować się jeszcze raz.", "sso_unavailable": "Nie udało się połączyć z Kodland. Sprawdź internet i spróbuj ponownie — to nie hasło." } };
@@ -12790,7 +12790,7 @@ const pl = {
   tabs: tabs$3,
   error: error$3
 };
-const app$2 = { "name": "CraftForge Education Edition" };
+const app$2 = { "name": "Kodland Launcher" };
 const appUpdate$2 = { "versionLabel": "Versão {version}", "check": "Verificar", "checkFull": "Verificar atualizações", "checking": "Verificando…", "upToDate": "Você tem o launcher mais novo", "checkFailed": "Não foi possível verificar. Tente mais tarde.", "osTooOld": "Este computador não consegue usar um launcher mais novo. Continua a jogar com este.", "downloading": "Baixando o launcher novo", "comingSoon": "O launcher novo está a caminho", "available": "Existe um launcher mais novo", "readyToInstall": "O launcher novo está pronto", "install": "Instalar", "restartQuestion": "O launcher vai fechar e abrir de novo.", "cancel": "Cancelar", "notNow": "Agora não. Feche o jogo ou espere o download terminar.", "unsupported": "Precisa atualizar", "unsupportedWhy": "Este launcher é antigo demais para as aulas de hoje. Baixe o novo para continuar jogando.", "get": "Baixar o novo" };
 const language$2 = { "label": "Idioma" };
 const signIn$2 = { "title": "Pronto para jogar?", "body": "Aperte o botão e confirme no navegador. Não tem senha para digitar.", "action": "Entrar", "working": "Abrindo o navegador…", "useCode": "O navegador não abre? Entre com um código", "error": { "invalid_credentials": "A Kodland não deixou entrar. Entre primeiro em learn.kodland.org e aperte o botão de novo.", "not_student": "Esta conta não é de aluno, então o jogo não abre com ela. Pergunta ao seu professor.", "sso_expired": "Você precisa entrar de novo.", "sso_unavailable": "Não conseguimos falar com a Kodland. Confere a internet e tenta de novo — não é a sua senha." } };
@@ -12844,7 +12844,7 @@ const pt = {
   tabs: tabs$2,
   error: error$2
 };
-const app$1 = { "name": "CraftForge Education Edition" };
+const app$1 = { "name": "Kodland Launcher" };
 const appUpdate$1 = { "versionLabel": "Версия {version}", "check": "Проверить", "checkFull": "Проверить обновления", "checking": "Проверяем…", "upToDate": "У тебя самый новый лончер", "checkFailed": "Не получилось проверить. Попробуй позже.", "osTooOld": "На этом компьютере новый лончер не пойдёт. Играй на этом.", "downloading": "Качаем новый лончер", "comingSoon": "Новый лончер уже в пути", "available": "Есть лончер новее этого", "readyToInstall": "Новый лончер готов", "install": "Установить", "restartQuestion": "Лончер закроется и откроется заново.", "cancel": "Отмена", "notNow": "Сейчас нельзя. Закрой игру или дождись конца загрузки.", "unsupported": "Требуется обновление", "unsupportedWhy": "Этот лончер слишком старый для сегодняшних уроков. Скачай новый, чтобы играть дальше.", "get": "Скачать новый" };
 const language$1 = { "label": "Язык" };
 const signIn$1 = { "title": "Готов играть?", "body": "Нажми кнопку и подтверди в браузере. Пароль вводить не нужно.", "action": "Войти", "working": "Открываем браузер…", "useCode": "Браузер не открывается? Войти по коду", "error": { "invalid_credentials": "Kodland не пустил. Сначала войди на learn.kodland.org, потом нажми кнопку снова.", "not_student": "Это не ученическая учётная запись, с неё игра не запустится. Спроси преподавателя.", "sso_expired": "Нужно войти заново.", "sso_unavailable": "Не получилось связаться с Kodland. Проверь интернет и попробуй снова — дело не в пароле." } };
@@ -12898,7 +12898,7 @@ const ru = {
   tabs: tabs$1,
   error: error$1
 };
-const app = { "name": "CraftForge Education Edition" };
+const app = { "name": "Kodland Launcher" };
 const appUpdate = { "versionLabel": "Sürüm {version}", "check": "Denetle", "checkFull": "Güncellemeleri denetle", "checking": "Denetleniyor…", "upToDate": "En yeni başlatıcı sende", "checkFailed": "Denetleyemedik. Sonra dene.", "osTooOld": "Bu bilgisayarda daha yeni bir sürüm çalışmaz. Bununla oynamaya devam et.", "downloading": "Yeni başlatıcıyı indiriyoruz", "comingSoon": "Yeni başlatıcı yolda", "available": "Bundan daha yeni bir başlatıcı var", "readyToInstall": "Yeni başlatıcı hazır", "install": "Kur", "restartQuestion": "Başlatıcı kapanıp yeniden açılacak.", "cancel": "Vazgeç", "notNow": "Şimdi olmaz. Oyunu kapat ya da indirmenin bitmesini bekle.", "unsupported": "Güncelleme gerekli", "unsupportedWhy": "Bu başlatıcı bugünkü dersler için çok eski. Oynamaya devam etmek için yenisini indir.", "get": "Yenisini indir" };
 const language = { "label": "Dil" };
 const signIn = { "title": "Oynamaya hazır mısın?", "body": "Düğmeye bas ve tarayıcıda onayla. Şifre yazmak yok.", "action": "Giriş yap", "working": "Tarayıcı açılıyor…", "useCode": "Tarayıcı açılmıyor mu? Kodla giriş yap", "error": { "invalid_credentials": "Kodland bizi içeri almadı. Önce learn.kodland.org'a giriş yap, sonra düğmeye tekrar bas.", "not_student": "Bu bir öğrenci hesabı değil, oyun bununla başlamaz. Öğretmenine sor.", "sso_expired": "Tekrar giriş yapman gerekiyor.", "sso_unavailable": "Kodland sunucusuna ulaşamadık. İnterneti kontrol et ve tekrar dene — sorun şifrende değil." } };
@@ -14905,24 +14905,6 @@ function TeacherCodeInput({ messages, onUnlock, savedTeacherCode }) {
       ]
     }
   );
-}
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "span",
-        {
-          "aria-hidden": "true",
-          className: "pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-24 text-stone-800 rtl:-scale-x-100",
-          children: /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { viewBox: "0 0 96 32", preserveAspectRatio: "none", className: "size-full", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "path",
-            {
-              fill: "currentColor",
-              d: "M0 20h8v-4h6v-6h7v5h9v7h6v-9h8v4h7v-6h9v8h6v-3h8v6h6v-4h6v18H0Z"
-            }
-          ) })
-        }
-      ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(LockedWorld, { messages, onUnlock })
-    ] }) : null
-  ] });
 }
 function tileClass(selected) {
   return [
