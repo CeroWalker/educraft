@@ -471,10 +471,12 @@ function buildLevelData(options) {`
     'const onGameOutput = (chunk) => {\n        gameLog?.write(chunk);',
     `const onGameOutput = (chunk) => {
         gameLog?.write(chunk);
-        const e4mcMatch = chunk.match(/([a-z0-9-]+\\.e4mc\\.link)/i);
+        const e4mcMatch = chunk.match(/(?:Domain assigned:\\s*|hosted on domain \\[)?([a-z0-9.-]+\\.e4mc\\.link)/i);
         if (e4mcMatch && e4mcMatch[1] && !activeBeaconUrl) {
-          activeBeaconUrl = e4mcMatch[1];
-          log(\`[CraftForge] e4mc live tunnel detected: \${activeBeaconUrl}\`);
+          const candidate = e4mcMatch[1].toLowerCase().replace(/[\[\]]/g, "");
+          if (candidate !== "broker.e4mc.link" && candidate !== "natives.e4mc.link") {
+            activeBeaconUrl = candidate;
+            log(\`[CraftForge] e4mc live tunnel detected: \${activeBeaconUrl}\`);
           const teacherCode = (launcherSettings.teacherCode || identity?.login || identity?.nickname || launcherSettings.lastNickname || "").trim();
           const teacherName = (launcherSettings.teacherName || identity?.nickname || identity?.login || launcherSettings.lastNickname || "").trim();
           if (teacherCode) {
@@ -485,6 +487,7 @@ function buildLevelData(options) {`
                 void reportTeacherSession(teacherCode, teacherName, activeBeaconUrl, true);
               }
             }, 25000);
+          }
           }
         }`
   );

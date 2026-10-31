@@ -1,6 +1,6 @@
 {
   "name": "@kodland/desktop",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": true,
   "description": "Kodland Launcher desktop shell",
   "main": "out/main/index.js",
