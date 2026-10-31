@@ -33,14 +33,14 @@ elif ! grep -q "guiScale:" "$OPTIONS_FILE"; then
 fi
 
 # 2. Check / Install Python 3
-echo "[2/5] Python 3 kontrol ediliyor..."
+echo "[2/5] Bağımlılıklar (Python 3 & Node.js) kontrol ediliyor..."
+SUDO_CMD=""
+if [ "$EUID" -ne 0 ]; then
+    if command -v sudo &> /dev/null; then SUDO_CMD="sudo"; elif command -v pkexec &> /dev/null; then SUDO_CMD="pkexec"; fi
+fi
+
 if ! command -v python3 &> /dev/null; then
     echo "⚠️ Python 3 bulunamadı! Paket yöneticisi ile kuruluyor..."
-    SUDO_CMD=""
-    if [ "$EUID" -ne 0 ]; then
-        if command -v sudo &> /dev/null; then SUDO_CMD="sudo"; elif command -v pkexec &> /dev/null; then SUDO_CMD="pkexec"; fi
-    fi
-
     if [ "$OS_TYPE" = "Darwin" ]; then
         if command -v brew &> /dev/null; then brew install python3; else echo "Lütfen Homebrew veya python.org üzerinden Python 3 kurun."; fi
     elif command -v apt-get &> /dev/null; then $SUDO_CMD apt-get update -qq && $SUDO_CMD apt-get install -y python3 python3-pip
@@ -48,6 +48,25 @@ if ! command -v python3 &> /dev/null; then
     elif command -v pacman &> /dev/null; then $SUDO_CMD pacman -S --noconfirm python
     elif command -v zypper &> /dev/null; then $SUDO_CMD zypper install -y python3
     elif command -v apk &> /dev/null; then $SUDO_CMD apk add --no-cache python3
+    fi
+fi
+
+# Check Node.js / npx (Electron Runtime)
+if ! command -v npx &> /dev/null && ! command -v electron &> /dev/null; then
+    echo "⚠️ Node.js / npx bulunamadı! Kurulum deneniyor..."
+    if [ "$OS_TYPE" = "Darwin" ]; then
+        if command -v brew &> /dev/null; then
+            echo "🍺 Homebrew üzerinden Node.js kuruluyor..."
+            brew install node
+        else
+            echo "⚠️ macOS üzerinde Node.js (veya Homebrew) bulunamadı."
+            echo "💡 Kurulum bittikten sonra https://nodejs.org adresinden Node.js kurmanız gerekebilir."
+        fi
+    elif command -v apt-get &> /dev/null; then $SUDO_CMD apt-get update -qq && $SUDO_CMD apt-get install -y nodejs npm
+    elif command -v dnf &> /dev/null; then $SUDO_CMD dnf install -y nodejs npm
+    elif command -v pacman &> /dev/null; then $SUDO_CMD pacman -S --noconfirm nodejs npm
+    elif command -v zypper &> /dev/null; then $SUDO_CMD zypper install -y nodejs npm
+    elif command -v apk &> /dev/null; then $SUDO_CMD apk add --no-cache nodejs npm
     fi
 fi
 
@@ -117,6 +136,39 @@ EODESK
         chmod +x "$USER_DESKTOP/craftforge-edu.desktop" 2>/dev/null || true
         if command -v gio &>/dev/null; then
             gio trust "$USER_DESKTOP/craftforge-edu.desktop" 2>/dev/null || true
+        fi
+    fi
+
+elif [ "$OS_TYPE" = "Darwin" ]; then
+    # 5.1 macOS Applications Klasörü için .app Oluşturma
+    MAC_APPS="$HOME/Applications"
+    mkdir -p "$MAC_APPS"
+    APP_BUNDLE="$MAC_APPS/CraftForge Education.app"
+
+    # osacompile ile macOS native Applet paketi üret
+    if command -v osacompile &>/dev/null; then
+        osacompile -o "$APP_BUNDLE" -e "do shell script \"\\\"$TARGET_DIR/run.sh\\\" > /dev/null 2>&1 &\"" 2>/dev/null || true
+        if [ -f "$TARGET_DIR/icon.png" ] && command -v sips &>/dev/null; then
+            sips -s format icns "$TARGET_DIR/icon.png" --out "$APP_BUNDLE/Contents/Resources/applet.icns" 2>/dev/null || true
+        fi
+    fi
+
+    # 5.2 Masaüstü Kısayolu (~/Desktop)
+    USER_DESKTOP="$HOME/Desktop"
+    if [ -d "$HOME/Masaüstü" ]; then USER_DESKTOP="$HOME/Masaüstü"; fi
+
+    if [ -d "$USER_DESKTOP" ]; then
+        # Doğrudan çift tıklanabilir .command dosyası
+        cat << EOCMD > "$USER_DESKTOP/CraftForge Education.command"
+#!/bin/bash
+exec "$TARGET_DIR/run.sh"
+EOCMD
+        chmod +x "$USER_DESKTOP/CraftForge Education.command"
+
+        # Eğer .app oluşturulduysa masaüstüne de kopyala
+        if [ -d "$APP_BUNDLE" ]; then
+            rm -rf "$USER_DESKTOP/CraftForge Education.app"
+            cp -R "$APP_BUNDLE" "$USER_DESKTOP/CraftForge Education.app" 2>/dev/null || true
         fi
     fi
 fi

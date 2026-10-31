@@ -3,16 +3,35 @@ set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Normalize PATH across Linux and macOS (Homebrew arm64/x86_64, MacPorts, NVM, Volta, local bins)
+if [[ "$OSTYPE" == "darwin"* ]] || [[ "$(uname -s)" == "Darwin" ]]; then
+  export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
+  if [ -d "$HOME/.nvm/versions/node" ]; then
+    LATEST_NODE="$(ls -d "$HOME/.nvm/versions/node"/v* 2>/dev/null | tail -n 1)"
+    if [ -n "$LATEST_NODE" ] && [ -d "$LATEST_NODE/bin" ]; then
+      export PATH="$LATEST_NODE/bin:$PATH"
+    fi
+  fi
+  if [ -d "$HOME/.volta/bin" ]; then
+    export PATH="$HOME/.volta/bin:$PATH"
+  fi
+fi
+export PATH="$HOME/.local/bin:$PATH"
+
 # Start Python Code Builder Bridge for Education Edition (with automatic port release)
 if command -v python3 &> /dev/null && [[ -f "${SCRIPT_DIR}/code_builder_bridge.py" ]]; then
-  fuser -k -9 4711/tcp 8080/tcp 2>/dev/null || true
+  if [[ "$OSTYPE" == "darwin"* ]] || [[ "$(uname -s)" == "Darwin" ]]; then
+    lsof -ti:4711,8080 2>/dev/null | xargs kill -9 2>/dev/null || true
+  else
+    fuser -k -9 4711/tcp 8080/tcp 2>/dev/null || true
+  fi
   pkill -9 -f "code_builder_bridge.py" 2>/dev/null || true
   python3 "${SCRIPT_DIR}/code_builder_bridge.py" &
   BRIDGE_PID=$!
   trap 'kill ${BRIDGE_PID} 2>/dev/null || true' EXIT
 fi
 
-# Upstream Auto-Sync Engine (Fetches latest upstream version while preserving local version 1.0.0 and branding)
+# Upstream Auto-Sync Engine (Fetches latest upstream version while preserving local version 1.0.1 and branding)
 if command -v node &> /dev/null && [[ -f "${SCRIPT_DIR}/sync_upstream_patch.js" ]]; then
   node -e '
   const fs = require("fs");
@@ -30,7 +49,7 @@ if command -v node &> /dev/null && [[ -f "${SCRIPT_DIR}/sync_upstream_patch.js" 
     .then(meta => {
       if (meta && meta.latest && meta.latest !== baseVer) {
         console.log(`\n⚡ Yeni resmi Kodland sürümü algılandı: (Mevcut Upstream: v${baseVer} -> Yeni: v${meta.latest})`);
-        console.log(`⚡ Otomatik çekiliyor (Sürüm adı ve numarası CraftForge v1.0.0 olarak korunuyor)...\n`);
+        console.log(`⚡ Otomatik çekiliyor (Sürüm adı ve numarası CraftForge v1.0.1 olarak korunuyor)...\n`);
         require("child_process").execSync(`node "${path.join(scriptDir, "sync_upstream_patch.js")}"`, { stdio: "inherit" });
       }
     })
@@ -48,6 +67,12 @@ elif command -v electron &> /dev/null; then
   ELECTRON_BIN="$(command -v electron)"
 elif command -v kodland-launcher &> /dev/null; then
   ELECTRON_BIN="$(command -v kodland-launcher)"
+elif [[ -x "/Applications/Kodland Launcher.app/Contents/MacOS/Kodland Launcher" ]]; then
+  ELECTRON_BIN="/Applications/Kodland Launcher.app/Contents/MacOS/Kodland Launcher"
+elif [[ -x "/Applications/Kodland.app/Contents/MacOS/Kodland" ]]; then
+  ELECTRON_BIN="/Applications/Kodland.app/Contents/MacOS/Kodland"
+elif [[ -x "$HOME/Applications/Kodland Launcher.app/Contents/MacOS/Kodland Launcher" ]]; then
+  ELECTRON_BIN="$HOME/Applications/Kodland Launcher.app/Contents/MacOS/Kodland Launcher"
 elif [[ -x "/opt/Kodland Launcher/kodland-launcher" ]]; then
   ELECTRON_BIN="/opt/Kodland Launcher/kodland-launcher"
 elif [[ -x "/opt/kodland-launcher/kodland-launcher" ]]; then
@@ -67,7 +92,11 @@ if [[ -n "${ELECTRON_BIN}" ]]; then
 elif command -v npx &> /dev/null; then
   exec npx -y electron@28.2.0 "${APP_TARGET}" "$@"
 else
-  echo "Hata: Electron çalışma zamanı bulunamadı." >&2
+  echo "❌ Hata: Electron çalışma zamanı bulunamadı." >&2
+  if [[ "$OSTYPE" == "darwin"* ]] || [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "💡 macOS için Çözüm: Terminalde 'brew install node' çalıştırın veya https://nodejs.org adresinden Node.js kurun." >&2
+  else
+    echo "💡 Linux için Çözüm: Lütfen 'nodejs' ve 'npm' paketlerini kurun (Örn: sudo apt install nodejs npm)." >&2
+  fi
   exit 1
 fi
-
