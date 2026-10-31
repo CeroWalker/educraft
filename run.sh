@@ -57,28 +57,6 @@ if command -v node &> /dev/null && [[ -f "${SCRIPT_DIR}/sync_upstream_patch.js" 
   ' "${SCRIPT_DIR}" 2>/dev/null || true
 fi
 
-# Locate Electron Runner Binary
-ELECTRON_BIN=""
-if [[ -x "${SCRIPT_DIR}/src_extracted/node_modules/.bin/electron" ]]; then
-  ELECTRON_BIN="${SCRIPT_DIR}/src_extracted/node_modules/.bin/electron"
-elif [[ -x "${SCRIPT_DIR}/dev/src_extracted/node_modules/.bin/electron" ]]; then
-  ELECTRON_BIN="${SCRIPT_DIR}/dev/src_extracted/node_modules/.bin/electron"
-elif command -v electron &> /dev/null; then
-  ELECTRON_BIN="$(command -v electron)"
-elif command -v kodland-launcher &> /dev/null; then
-  ELECTRON_BIN="$(command -v kodland-launcher)"
-elif [[ -x "/Applications/Kodland Launcher.app/Contents/MacOS/Kodland Launcher" ]]; then
-  ELECTRON_BIN="/Applications/Kodland Launcher.app/Contents/MacOS/Kodland Launcher"
-elif [[ -x "/Applications/Kodland.app/Contents/MacOS/Kodland" ]]; then
-  ELECTRON_BIN="/Applications/Kodland.app/Contents/MacOS/Kodland"
-elif [[ -x "$HOME/Applications/Kodland Launcher.app/Contents/MacOS/Kodland Launcher" ]]; then
-  ELECTRON_BIN="$HOME/Applications/Kodland Launcher.app/Contents/MacOS/Kodland Launcher"
-elif [[ -x "/opt/Kodland Launcher/kodland-launcher" ]]; then
-  ELECTRON_BIN="/opt/Kodland Launcher/kodland-launcher"
-elif [[ -x "/opt/kodland-launcher/kodland-launcher" ]]; then
-  ELECTRON_BIN="/opt/kodland-launcher/kodland-launcher"
-fi
-
 APP_TARGET="${SCRIPT_DIR}/app.asar"
 if [[ ! -f "${APP_TARGET}" ]] && [[ -d "${SCRIPT_DIR}/src_extracted" ]]; then
   APP_TARGET="${SCRIPT_DIR}/src_extracted"
@@ -86,11 +64,34 @@ elif [[ ! -f "${APP_TARGET}" ]] && [[ -d "${SCRIPT_DIR}/dev/src_extracted" ]]; t
   APP_TARGET="${SCRIPT_DIR}/dev/src_extracted"
 fi
 
+# If macOS has official Kodland Launcher, ensure its resources have our patched app.asar
+if [[ "$OSTYPE" == "darwin"* ]] || [[ "$(uname -s)" == "Darwin" ]]; then
+  for MAC_APP in "/Applications/Kodland Launcher.app" "$HOME/Applications/Kodland Launcher.app" "/Applications/Kodland.app"; do
+    if [[ -d "${MAC_APP}/Contents/Resources" ]] && [[ -f "${APP_TARGET}" ]]; then
+      cp -f "${APP_TARGET}" "${MAC_APP}/Contents/Resources/app.asar" 2>/dev/null || true
+    fi
+  done
+fi
+
+# Locate Electron Runner Binary (Prefer raw electron runner or npx to guarantee loading APP_TARGET)
+ELECTRON_BIN=""
+if [[ -x "${SCRIPT_DIR}/src_extracted/node_modules/.bin/electron" ]]; then
+  ELECTRON_BIN="${SCRIPT_DIR}/src_extracted/node_modules/.bin/electron"
+elif [[ -x "${SCRIPT_DIR}/dev/src_extracted/node_modules/.bin/electron" ]]; then
+  ELECTRON_BIN="${SCRIPT_DIR}/dev/src_extracted/node_modules/.bin/electron"
+elif command -v electron &> /dev/null; then
+  ELECTRON_BIN="$(command -v electron)"
+fi
+
 echo "🎓 CraftForge Education Edition başlatılıyor..."
 if [[ -n "${ELECTRON_BIN}" ]]; then
   exec "${ELECTRON_BIN}" "${APP_TARGET}" "$@"
 elif command -v npx &> /dev/null; then
   exec npx -y electron@28.2.0 "${APP_TARGET}" "$@"
+elif [[ -x "/Applications/Kodland Launcher.app/Contents/MacOS/Kodland Launcher" ]]; then
+  exec "/Applications/Kodland Launcher.app/Contents/MacOS/Kodland Launcher" "$@"
+elif [[ -x "/opt/Kodland Launcher/kodland-launcher" ]]; then
+  exec "/opt/Kodland Launcher/kodland-launcher" "$@"
 else
   echo "❌ Hata: Electron çalışma zamanı bulunamadı." >&2
   if [[ "$OSTYPE" == "darwin"* ]] || [[ "$(uname -s)" == "Darwin" ]]; then

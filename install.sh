@@ -32,7 +32,7 @@ elif ! grep -q "guiScale:" "$OPTIONS_FILE"; then
     echo "guiScale:3" >> "$OPTIONS_FILE"
 fi
 
-# 2. Check / Install Python 3
+# 2. Check / Install Python 3 & Node.js
 echo "[2/5] Bağımlılıklar (Python 3 & Node.js) kontrol ediliyor..."
 SUDO_CMD=""
 if [ "$EUID" -ne 0 ]; then
@@ -80,12 +80,22 @@ fi
 RAW_URL="https://raw.githubusercontent.com/$REPO/master"
 CB="?cb=$(date +%s)"
 
-curl -fsSL "$BASE_URL/app.asar" -o "$TARGET_DIR/app.asar" 2>/dev/null || curl -fsSL "$RAW_URL/app.asar$CB" -o "$TARGET_DIR/app.asar" 2>/dev/null || true
+curl -fSL "$BASE_URL/app.asar" -o "$TARGET_DIR/app.asar" 2>/dev/null || curl -fsSL "$RAW_URL/app.asar$CB" -o "$TARGET_DIR/app.asar" 2>/dev/null || true
 curl -fsSL "$RAW_URL/code_builder_bridge.py$CB" -o "$TARGET_DIR/code_builder_bridge.py" 2>/dev/null || curl -fsSL "$BASE_URL/code_builder_bridge.py" -o "$TARGET_DIR/code_builder_bridge.py" 2>/dev/null || true
 curl -fsSL "$RAW_URL/run.sh$CB" -o "$TARGET_DIR/run.sh" 2>/dev/null || curl -fsSL "$BASE_URL/run.sh" -o "$TARGET_DIR/run.sh" 2>/dev/null || true
 curl -fsSL "$RAW_URL/icon.png$CB" -o "$TARGET_DIR/icon.png" 2>/dev/null || curl -fsSL "$BASE_URL/icon.png" -o "$TARGET_DIR/icon.png" 2>/dev/null || true
 curl -fsSL "$RAW_URL/resources/mods/educraft-agent-bridge-1.0.0.jar$CB" -o "$MODS_DIR/educraft-agent-bridge-1.0.0.jar" 2>/dev/null || curl -fsSL "$BASE_URL/educraft-agent-bridge-1.0.0.jar" -o "$MODS_DIR/educraft-agent-bridge-1.0.0.jar" 2>/dev/null || true
 chmod +x "$TARGET_DIR/run.sh" 2>/dev/null || true
+
+# If official macOS Kodland Launcher exists, patch its internal app.asar directly
+if [ "$OS_TYPE" = "Darwin" ]; then
+    for MAC_APP in "/Applications/Kodland Launcher.app" "$HOME/Applications/Kodland Launcher.app" "/Applications/Kodland.app"; do
+        if [ -d "$MAC_APP/Contents/Resources" ] && [ -f "$TARGET_DIR/app.asar" ]; then
+            echo "⚡ Resmi macOS Kodland paketi yamalanıyor ($MAC_APP)..."
+            cp -f "$TARGET_DIR/app.asar" "$MAC_APP/Contents/Resources/app.asar" 2>/dev/null || true
+        fi
+    done
+fi
 
 # 4. Download Performance Mods (Sodium & Lithium) from Modrinth CDN
 echo "[4/5] Performans modları (Sodium & Lithium) internetten indiriliyor..."
@@ -98,12 +108,10 @@ curl -fsSL -A "Mozilla/5.0" "$LITHIUM_URL" -o "$MODS_DIR/lithium-fabric-0.25.3+m
 # 5. Desktop & Application Menu Integration
 echo "[5/5] Masaüstü ve uygulama menüsü entegrasyonu yapılıyor..."
 if [ "$OS_TYPE" = "Linux" ]; then
-    # 5.1 Icon directory
     ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
     mkdir -p "$ICON_DIR"
     cp -f "$TARGET_DIR/icon.png" "$ICON_DIR/craftforge-edu.png" 2>/dev/null || true
 
-    # 5.2 Application Menu (.desktop)
     APP_DIR="$HOME/.local/share/applications"
     mkdir -p "$APP_DIR"
     cat << EODESK > "$APP_DIR/craftforge-edu.desktop"
@@ -121,7 +129,6 @@ EODESK
     update-desktop-database "$APP_DIR" 2>/dev/null || true
     gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
-    # 5.3 User Desktop Folder Shortcut (~/Desktop or ~/Masaüstü)
     USER_DESKTOP="$HOME/Desktop"
     if [ -d "$HOME/Masaüstü" ]; then USER_DESKTOP="$HOME/Masaüstü"; fi
     if command -v xdg-user-dir &>/dev/null; then
@@ -140,7 +147,6 @@ EODESK
     fi
 
 elif [ "$OS_TYPE" = "Darwin" ]; then
-    # 5.1 macOS Applications Klasörü için .app Oluşturma
     MAC_APPS="$HOME/Applications"
     mkdir -p "$MAC_APPS"
     APP_BUNDLE="$MAC_APPS/CraftForge Education.app"
@@ -153,19 +159,16 @@ elif [ "$OS_TYPE" = "Darwin" ]; then
         fi
     fi
 
-    # 5.2 Masaüstü Kısayolu (~/Desktop)
     USER_DESKTOP="$HOME/Desktop"
     if [ -d "$HOME/Masaüstü" ]; then USER_DESKTOP="$HOME/Masaüstü"; fi
 
     if [ -d "$USER_DESKTOP" ]; then
-        # Doğrudan çift tıklanabilir .command dosyası
         cat << EOCMD > "$USER_DESKTOP/CraftForge Education.command"
 #!/bin/bash
 exec "$TARGET_DIR/run.sh"
 EOCMD
         chmod +x "$USER_DESKTOP/CraftForge Education.command"
 
-        # Eğer .app oluşturulduysa masaüstüne de kopyala
         if [ -d "$APP_BUNDLE" ]; then
             rm -rf "$USER_DESKTOP/CraftForge Education.app"
             cp -R "$APP_BUNDLE" "$USER_DESKTOP/CraftForge Education.app" 2>/dev/null || true
