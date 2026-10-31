@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-CraftForge Education Edition - Full Education & Agent Code Builder Bridge Daemon + Web IDE Server
+CraftForge Education Edition - Full Education & Agent Code Builder Bridge Daemon + Visual Blockly Web IDE Server
 Provides:
  1. Education Code Builder TCP Server (Port 4711) for game client & IPC
- 2. In-Game Mod Web Overlay HTTP Server (Port 8080) for Electron & Java Mod interface
- 3. AST-based Restricted Python Sandbox for executing player scripts safely
- 4. AST-based Function Call Parser (Zero String Split Hacks)
- 5. RAM Telemetry & Block Detection Cache
+ 2. In-Game Mod Web Overlay HTTP Server (Port 8080) with Google Blockly Visual Scratch & Python Coding
+ 3. Custom Agent & Minecraft Blockly Blocks with real-time Python code generation
+ 4. AST-based Restricted Python Sandbox for executing player scripts safely
+ 5. AST-based Function Call Parser & RAM Telemetry Cache
 """
 import sys
 import time
@@ -39,10 +39,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CraftForge Education - Code Builder IDE</title>
+    <!-- Google Blockly Library CDN -->
+    <script src="https://unpkg.com/blockly@10.4.3/blockly_compressed.js"></script>
+    <script src="https://unpkg.com/blockly@10.4.3/blocks_compressed.js"></script>
+    <script src="https://unpkg.com/blockly@10.4.3/python_compressed.js"></script>
+    <script src="https://unpkg.com/blockly@10.4.3/msg/tr.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
         body { 
-            background: rgba(15, 23, 42, 0.92); 
+            background: rgba(15, 23, 42, 0.94); 
             backdrop-filter: blur(16px); 
             -webkit-backdrop-filter: blur(16px);
             color: #f8fafc; 
@@ -54,8 +59,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             box-shadow: 8px 0 24px rgba(0, 0, 0, 0.5);
         }
         header { 
-            background: rgba(30, 41, 59, 0.8); 
-            padding: 12px 16px; 
+            background: rgba(30, 41, 59, 0.85); 
+            padding: 8px 16px; 
             border-bottom: 1px solid rgba(255, 255, 255, 0.1); 
             display: flex; 
             justify-content: space-between; 
@@ -63,46 +68,63 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             -webkit-app-region: drag;
         }
         .logo { font-size: 0.95rem; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+        .tabs { display: flex; gap: 8px; -webkit-app-region: no-drag; }
+        .tab-btn { background: rgba(51, 65, 85, 0.6); color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.1); padding: 6px 16px; border-radius: 6px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.2s; }
+        .tab-btn.active { background: #3b82f6; color: white; border-color: #60a5fa; }
+        .tab-btn:hover:not(.active) { background: rgba(71, 85, 105, 0.8); color: #f8fafc; }
         .status { font-size: 0.75rem; background: rgba(6, 78, 59, 0.8); color: #34d399; padding: 4px 12px; border-radius: 9999px; font-weight: 600; border: 1px solid #059669; }
-        main { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding: 16px; gap: 16px; }
-        .controls { background: rgba(30, 41, 59, 0.6); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-        .section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 700; margin-bottom: 8px; }
-        .btn { background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; -webkit-app-region: no-drag; }
+
+        main { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding: 12px; gap: 12px; }
+        
+        .tab-content { display: none; flex: 1; flex-direction: column; min-height: 0; }
+        .tab-content.active { display: flex; }
+
+        #blocklyContainer { flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); overflow: hidden; }
+        #blocklyDiv { width: 100%; height: 100%; }
+
+        .editor-container { display: flex; flex-direction: column; flex: 1; min-height: 0; background: rgba(9, 13, 22, 0.85); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); overflow: hidden; }
+        textarea { flex: 1; background: transparent; color: #38bdf8; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.9rem; padding: 16px; border: none; resize: none; outline: none; line-height: 1.5; }
+        
+        .action-bar { background: rgba(30, 41, 59, 0.8); padding: 8px 16px; border-top: 1px solid rgba(255, 255, 255, 0.1); display: flex; gap: 8px; }
+        .btn { background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; -webkit-app-region: no-drag; }
         .btn:hover { background: #2563eb; transform: translateY(-1px); }
         .btn-success { background: #10b981; }
         .btn-success:hover { background: #059669; }
-        .btn-warning { background: #f59e0b; color: #000; }
-        .btn-warning:hover { background: #d97706; }
-        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-        .editor-container { display: flex; flex-direction: column; flex: 1; min-height: 0; background: rgba(9, 13, 22, 0.85); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); overflow: hidden; }
-        textarea { flex: 1; background: transparent; color: #38bdf8; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.9rem; padding: 16px; border: none; resize: none; outline: none; line-height: 1.5; }
-        .action-bar { background: rgba(30, 41, 59, 0.8); padding: 8px 16px; border-top: 1px solid rgba(255, 255, 255, 0.1); display: flex; gap: 8px; }
-        .console { background: rgba(2, 6, 23, 0.95); border-top: 1px solid rgba(255, 255, 255, 0.1); height: 104px; padding: 8px 16px; font-family: monospace; font-size: 0.75rem; color: #a7f3d0; overflow-y: auto; }
+        
+        .console { background: rgba(2, 6, 23, 0.95); border-top: 1px solid rgba(255, 255, 255, 0.1); height: 90px; padding: 8px 16px; font-family: monospace; font-size: 0.75rem; color: #a7f3d0; overflow-y: auto; }
+        
+        /* Blockly Dark Theme Customization */
+        .blocklyTreeLabel { color: #f8fafc !important; font-weight: 600; }
+        .blocklyFlyoutBackground { fill: #1e293b !important; fill-opacity: 0.9; }
+        .blocklyMainBackground { fill: #0f172a !important; }
     </style>
 </head>
 <body>
     <header>
-        <div class="logo">🎓 CraftForge Edu IDE</div>
+        <div class="logo">🎓 CraftForge Edu Code Builder</div>
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('blocks')">🧩 Görsel Bloklar (Scratch)</button>
+            <button class="tab-btn" onclick="switchTab('python')">🐍 Python Kodu</button>
+        </div>
         <div class="status">🟢 Aktif (N Kapatır)</div>
     </header>
     <main>
-        <div class="controls">
-            <div class="section-title">🤖 Agent Robot Aksiyonları</div>
-            <button class="btn btn-success" onclick="runCmd('agent.spawn()')">✨ Agent Robot Çağır / Işınla</button>
-            <div class="grid-4" style="margin-top: 8px;">
-                <button class="btn" onclick="runCmd('agent.move(\\'forward\\', 1)')">⬆️ İleri</button>
-                <button class="btn" onclick="runCmd('agent.move(\\'back\\', 1)')">⬇️ Geri</button>
-                <button class="btn" onclick="runCmd('agent.move(\\'left\\', 1)')">⬅️ Sol</button>
-                <button class="btn" onclick="runCmd('agent.move(\\'right\\', 1)')">➡️ Sağ</button>
+        <!-- TAB 1: BLOCKLY VISUAL SCRATCH CODING -->
+        <div id="tab-blocks" class="tab-content active">
+            <div id="blocklyContainer">
+                <div id="blocklyDiv"></div>
             </div>
-            <div class="grid-2" style="margin-top: 8px;">
-                <button class="btn btn-warning" onclick="runCmd('agent.place()')">🧱 Blok Koy</button>
-                <button class="btn btn-warning" onclick="runCmd('agent.destroy()')">⛏️ Blok Kır</button>
+            <div class="action-bar">
+                <button class="btn btn-success" style="flex: 2;" onclick="runBlocklyScript()">▶️ Görsel Kodu Oyunda Çalıştır</button>
+                <button class="btn" style="background: #8b5cf6;" onclick="runCmd('agent.spawn()')">✨ Agent Çağır</button>
+                <button class="btn" style="background: #475569;" onclick="workspace.clear()">🧹 Blokları Temizle</button>
             </div>
         </div>
-        <div class="editor-container">
-            <textarea id="codeEditor" spellcheck="false"># CraftForge Education - Python Script
+
+        <!-- TAB 2: RAW PYTHON TEXT CODE EDITOR -->
+        <div id="tab-python" class="tab-content">
+            <div class="editor-container">
+                <textarea id="codeEditor" spellcheck="false"># CraftForge Education - Python Script
 agent.spawn()
 
 # Önümüzde çimen varsa kır
@@ -116,19 +138,245 @@ for i in range(3):
     agent.move("up", 1)
 player.say("İşlem tamamlandı!")
 </textarea>
-            <div class="action-bar">
-                <button class="btn btn-success" style="flex: 2;" onclick="executeScript()">▶️ Oyunda Çalıştır</button>
-                <button class="btn" style="flex: 1; background: #475569;" onclick="document.getElementById('codeEditor').value=''">🧹 Temizle</button>
+                <div class="action-bar">
+                    <button class="btn btn-success" style="flex: 2;" onclick="executePythonScript()">▶️ Python Kodunu Çalıştır</button>
+                    <button class="btn" style="background: #475569;" onclick="document.getElementById('codeEditor').value=''">🧹 Temizle</button>
+                </div>
             </div>
-            <div class="console" id="console">💻 Konsol Hazır. (N tuşu paneli açar/kapatır)\n</div>
         </div>
+
+        <!-- SHARED CONSOLE OUTPUT -->
+        <div class="console" id="console">💻 Görsel Scratch & Python IDE Hazır. (N tuşu paneli açar/kapatır)\n</div>
     </main>
+
+    <!-- BLOCKLY TOOLBOX & BLOCK DEFINITIONS -->
+    <xml id="toolbox" style="display: none">
+        <category name="🤖 Agent Robot" colour="#10b981">
+            <block type="agent_spawn"></block>
+            <block type="agent_move"></block>
+            <block type="agent_turn"></block>
+            <block type="agent_place"></block>
+            <block type="agent_destroy"></block>
+            <block type="agent_detect"></block>
+        </category>
+        <category name="💬 Oyuncu & Dünya" colour="#3b82f6">
+            <block type="player_say"></block>
+            <block type="world_setblock"></block>
+            <block type="chemistry_element"></block>
+        </category>
+        <category name="🔄 Döngüler" colour="#8b5cf6">
+            <block type="controls_repeat_ext">
+                <value name="TIMES">
+                    <shadow type="math_number"><field name="NUM">3</field></shadow>
+                </value>
+            </block>
+            <block type="controls_whileUntil"></block>
+        </category>
+        <category name="🔀 Mantık & Karar" colour="#f59e0b">
+            <block type="controls_if"></block>
+            <block type="logic_compare"></block>
+            <block type="logic_boolean"></block>
+        </category>
+        <category name="🔢 Matematik" colour="#ec4899">
+            <block type="math_number"><field name="NUM">1</field></block>
+            <block type="math_arithmetic"></block>
+        </category>
+        <category name="📝 Metin" colour="#06b6d4">
+            <block type="text"><field name="TEXT">Merhaba Minecraft!</field></block>
+        </category>
+    </xml>
+
     <script>
         function log(msg) {
             const c = document.getElementById('console');
             c.innerText += msg + '\\n';
             c.scrollTop = c.scrollHeight;
         }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            if (tab === 'blocks') {
+                document.querySelectorAll('.tab-btn')[0].classList.add('active');
+                document.getElementById('tab-blocks').classList.add('active');
+                Blockly.svgResize(workspace);
+            } else {
+                document.querySelectorAll('.tab-btn')[1].classList.add('active');
+                document.getElementById('tab-python').classList.add('active');
+                // Sync Blockly generated code to Python editor
+                if (typeof Blockly !== 'undefined' && workspace) {
+                    const pyCode = python.pythonGenerator.workspaceToCode(workspace);
+                    if (pyCode.trim()) {
+                        document.getElementById('codeEditor').value = pyCode;
+                    }
+                }
+            }
+        }
+
+        // --- CUSTOM CRAFTFORGE BLOCKLY BLOCKS ---
+        Blockly.Blocks['agent_spawn'] = {
+            init: function() {
+                this.appendDummyInput().appendField("✨ Agent Robot Çağır / Işınla");
+                this.setPreviousStatement(true, null);
+                this.setNextStatement(true, null);
+                this.setColour(160);
+                this.setTooltip("Agent robotu oyuncunun yanına ışınlar.");
+            }
+        };
+        python.pythonGenerator.forBlock['agent_spawn'] = function(block) {
+            return 'agent.spawn()\\n';
+        };
+
+        Blockly.Blocks['agent_move'] = {
+            init: function() {
+                this.appendDummyInput()
+                    .appendField("⬆️ Agent")
+                    .appendField(new Blockly.FieldDropdown([["İleri","forward"], ["Geri","back"], ["Sol","left"], ["Sağ","right"], ["Yukarı","up"], ["Aşağı","down"]]), "DIR")
+                    .appendField("yönüne")
+                    .appendField(new Blockly.FieldNumber(1, 1, 100), "STEPS")
+                    .appendField("adım git");
+                this.setPreviousStatement(true, null);
+                this.setNextStatement(true, null);
+                this.setColour(160);
+            }
+        };
+        python.pythonGenerator.forBlock['agent_move'] = function(block) {
+            const dir = block.getFieldValue('DIR');
+            const steps = block.getFieldValue('STEPS');
+            return `agent.move("${dir}", ${steps})\\n`;
+        };
+
+        Blockly.Blocks['agent_turn'] = {
+            init: function() {
+                this.appendDummyInput()
+                    .appendField("🔄 Agent")
+                    .appendField(new Blockly.FieldDropdown([["Sağa","right"], ["Sola","left"], ["Geriye","back"]]), "DIR")
+                    .appendField("Dön");
+                this.setPreviousStatement(true, null);
+                this.setNextStatement(true, null);
+                this.setColour(160);
+            }
+        };
+        python.pythonGenerator.forBlock['agent_turn'] = function(block) {
+            const dir = block.getFieldValue('DIR');
+            return `agent.turn("${dir}")\\n`;
+        };
+
+        Blockly.Blocks['agent_place'] = {
+            init: function() {
+                this.appendDummyInput()
+                    .appendField("🧱 Agent")
+                    .appendField(new Blockly.FieldDropdown([["Öne","forward"], ["Aşağıya","down"], ["Yukarıya","up"], ["Sola","left"], ["Sağa","right"]]), "DIR")
+                    .appendField(new Blockly.FieldDropdown([["Taş (Stone)","stone"], ["Çimen (Grass)","grass_block"], ["Tahta (Planks)","oak_planks"], ["Cam (Glass)","glass"], ["Elmas Blok","diamond_block"]]), "BLOCK")
+                    .appendField("Koy");
+                this.setPreviousStatement(true, null);
+                this.setNextStatement(true, null);
+                this.setColour(160);
+            }
+        };
+        python.pythonGenerator.forBlock['agent_place'] = function(block) {
+            const dir = block.getFieldValue('DIR');
+            const b = block.getFieldValue('BLOCK');
+            return `agent.place("${dir}", "${b}")\\n`;
+        };
+
+        Blockly.Blocks['agent_destroy'] = {
+            init: function() {
+                this.appendDummyInput()
+                    .appendField("⛏️ Agent")
+                    .appendField(new Blockly.FieldDropdown([["Önündeki","forward"], ["Aşağısındaki","down"], ["Yukarısındaki","up"]]), "DIR")
+                    .appendField("Bloku Kır");
+                this.setPreviousStatement(true, null);
+                this.setNextStatement(true, null);
+                this.setColour(160);
+            }
+        };
+        python.pythonGenerator.forBlock['agent_destroy'] = function(block) {
+            const dir = block.getFieldValue('DIR');
+            return `agent.destroy("${dir}")\\n`;
+        };
+
+        Blockly.Blocks['agent_detect'] = {
+            init: function() {
+                this.appendDummyInput()
+                    .appendField("🔍 Agent")
+                    .appendField(new Blockly.FieldDropdown([["Önündeki","forward"], ["Aşağısındaki","down"], ["Yukarısındaki","up"]]), "DIR")
+                    .appendField("Blok Türü");
+                this.setOutput(true, "String");
+                this.setColour(160);
+            }
+        };
+        python.pythonGenerator.forBlock['agent_detect'] = function(block) {
+            const dir = block.getFieldValue('DIR');
+            return [`agent.detect("${dir}")`, python.pythonGenerator.ORDER_ATOMIC];
+        };
+
+        Blockly.Blocks['player_say'] = {
+            init: function() {
+                this.appendValueInput("MSG")
+                    .setCheck("String")
+                    .appendField("💬 Oyuncu Mesajı Gönder");
+                this.setPreviousStatement(true, null);
+                this.setNextStatement(true, null);
+                this.setColour(210);
+            }
+        };
+        python.pythonGenerator.forBlock['player_say'] = function(block) {
+            const msg = python.pythonGenerator.valueToCode(block, 'MSG', python.pythonGenerator.ORDER_ATOMIC) || '""';
+            return `player.say(${msg})\\n`;
+        };
+
+        Blockly.Blocks['world_setblock'] = {
+            init: function() {
+                this.appendDummyInput()
+                    .appendField("🌍 Blok Koy X:")
+                    .appendField(new Blockly.FieldNumber(0), "X")
+                    .appendField("Y:")
+                    .appendField(new Blockly.FieldNumber(64), "Y")
+                    .appendField("Z:")
+                    .appendField(new Blockly.FieldNumber(0), "Z")
+                    .appendField(new Blockly.FieldDropdown([["Taş","stone"], ["Çimen","grass_block"], ["Altın Blok","gold_block"]]), "BLOCK");
+                this.setPreviousStatement(true, null);
+                this.setNextStatement(true, null);
+                this.setColour(210);
+            }
+        };
+        python.pythonGenerator.forBlock['world_setblock'] = function(block) {
+            const x = block.getFieldValue('X');
+            const y = block.getFieldValue('Y');
+            const z = block.getFieldValue('Z');
+            const b = block.getFieldValue('BLOCK');
+            return `world.setBlock(${x}, ${y}, ${z}, "${b}")\\n`;
+        };
+
+        Blockly.Blocks['chemistry_element'] = {
+            init: function() {
+                this.appendDummyInput()
+                    .appendField("🧪 Kimya Elementi Ver:")
+                    .appendField(new Blockly.FieldDropdown([["Hidrojen (H)","Hydrogen"], ["Oksijen (O)","Oxygen"], ["Karbon (C)","Carbon"], ["Helyum (He)","Helium"]]), "ELEM");
+                this.setPreviousStatement(true, null);
+                this.setNextStatement(true, null);
+                this.setColour(280);
+            }
+        };
+        python.pythonGenerator.forBlock['chemistry_element'] = function(block) {
+            const elem = block.getFieldValue('ELEM');
+            return `chemistry.giveElement("${elem}")\\n`;
+        };
+
+        // --- INITIALIZE BLOCKLY WORKSPACE ---
+        let workspace = null;
+        window.addEventListener('DOMContentLoaded', () => {
+            workspace = Blockly.inject('blocklyDiv', {
+                toolbox: document.getElementById('toolbox'),
+                scrollbars: true,
+                trashcan: true,
+                zoom: { controls: true, wheel: true, startScale: 1.0, maxScale: 3, minScale: 0.3 }
+            });
+            window.addEventListener('resize', () => Blockly.svgResize(workspace));
+        });
+
         function runCmd(cmd) {
             log('⚡ ' + cmd);
             fetch('/api/run', { method: 'POST', body: cmd })
@@ -136,9 +384,24 @@ player.say("İşlem tamamlandı!")
                 .then(res => log('✅ ' + res))
                 .catch(err => log('❌ ' + err));
         }
-        function executeScript() {
+
+        function runBlocklyScript() {
+            const pyCode = python.pythonGenerator.workspaceToCode(workspace);
+            if (!pyCode.trim()) {
+                log('⚠️ Hiç blok eklenmedi!');
+                return;
+            }
+            log('🚀 Görsel Blok Kodları Çalıştırılıyor...');
+            log('📝 Üretilen Python Kodu:\\n' + pyCode);
+            fetch('/api/run', { method: 'POST', body: pyCode })
+                .then(r => r.text())
+                .then(res => log('🎉 ' + res))
+                .catch(err => log('❌ Hata: ' + err));
+        }
+
+        function executePythonScript() {
             const code = document.getElementById('codeEditor').value;
-            log('🚀 Script Çalıştırılıyor...');
+            log('🚀 Python Script Çalıştırılıyor...');
             fetch('/api/run', { method: 'POST', body: code })
                 .then(r => r.text())
                 .then(res => log('🎉 ' + res))
@@ -709,7 +972,7 @@ if __name__ == '__main__':
     try:
         bridge_instance = CodeBuilderBridge()
         bridge_instance.start()
-        log_bridge(f"✅ Bridge TCP (Port {PORT}) & In-Game Web Overlay (Port {WEB_PORT}) successfully initialized!")
+        log_bridge(f"✅ Bridge TCP (Port {PORT}) & Visual Blockly Overlay (Port {WEB_PORT}) successfully initialized!")
         while True:
             time.sleep(1)
     except Exception as err:

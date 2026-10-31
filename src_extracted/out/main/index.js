@@ -1,3 +1,45 @@
+const SIGNAL_BEACON_URL = "http://193.36.236.112/api/rooms";
+let activeBeaconUrl;
+let beaconHeartbeat;
+
+async function queryTeacherRoom(code = "") {
+  try {
+    const cleanCode = (code || "").trim();
+    if (cleanCode) {
+      const res = await fetch(`${SIGNAL_BEACON_URL}/${encodeURIComponent(cleanCode)}`, {
+        signal: AbortSignal.timeout(1500)
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data.ok && data.active && data.url) return data;
+      return null;
+    }
+    const res = await fetch(SIGNAL_BEACON_URL, {
+      signal: AbortSignal.timeout(1500)
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.ok && data.rooms) {
+      const activeRooms = Object.values(data.rooms).filter((r) => r.active && r.url);
+      if (activeRooms.length > 0) {
+        activeRooms.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        return activeRooms[0];
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function reportTeacherSession(code, teacherName, url, active) {
+  try {
+    await fetch(`${SIGNAL_BEACON_URL}/${encodeURIComponent(code)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, teacherName, active }),
+      signal: AbortSignal.timeout(2000)
+    });
+  } catch {}
+}
 "use strict";
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -30,7 +72,6 @@ const require$$0 = require("stream");
 const require$$2 = require("events");
 const require$$0$1 = require("buffer");
 const require$$1 = require("util");
-const process$2 = require("node:process");
 const node_zlib = require("node:zlib");
 const electron = require("electron");
 const node_fs = require("node:fs");
@@ -145,6 +186,26 @@ function checkScript(text) {
   }
   return problems;
 }
+async function writeFileAtomic(path, data) {
+  const temporary = `${path}.${process.pid}.${node_crypto.randomBytes(4).toString("hex")}.part`;
+  try {
+    await promises.writeFile(temporary, data);
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await promises.rename(temporary, path);
+        return;
+      } catch (error) {
+        const code = error.code;
+        const busy = code === "EPERM" || code === "EBUSY" || code === "EACCES";
+        if (!busy || attempt >= 5) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 20 * attempt));
+      }
+    }
+  } catch (error) {
+    await promises.rm(temporary, { force: true });
+    throw error;
+  }
+}
 class HashMismatchError extends Error {
   constructor(url, expected, actual) {
     super(
@@ -182,15 +243,7 @@ async function downloadVerified(url, destination, expectedSha512, fetchImpl = fe
   if (actual !== expectedSha512) {
     throw new HashMismatchError(url, expectedSha512, actual);
   }
-  const temporary = `${destination}.part`;
-  await promises.writeFile(temporary, bytes);
-  try {
-    await promises.rename(temporary, destination);
-  } catch (error) {
-    await promises.unlink(temporary).catch(() => {
-    });
-    throw error;
-  }
+  await writeFileAtomic(destination, bytes);
   return {
     path: destination,
     outcome: existing === void 0 ? "downloaded" : "replaced",
@@ -217,6 +270,15 @@ function instanceLayout(dataDir, packId) {
      */
     worldsSrc: node_path.join(instance, "worlds-src"),
     /**
+     * Where a new copy is put together before it becomes a world.
+     *
+     * Beside `saves/`, not in it: the game lists every folder in `saves/`, and
+     * a copy that is half done is a world it cannot open. On the same disk as
+     * `saves/`, so the last step is a rename and not a second copy. The dot
+     * keeps it out of sight in a file manager. See `createMyWorld`.
+     */
+    worldStaging: node_path.join(instance, ".world-staging"),
+    /**
      * Where Minescript looks for scripts, and **not a folder of ours**.
      *
      * Named here because the layout has one owner - the same argument that put
@@ -228,6 +290,15 @@ function instanceLayout(dataDir, packId) {
      * only those.
      */
     minescript: node_path.join(instance, MINESCRIPT_DIR),
+    /**
+     * Where the camera mod drops a photo, and **not a folder we keep anything in**.
+     *
+     * The mod writes `<id>.png` and then `<id>.json` here; `photo-store.ts`
+     * moves every finished pair out into the launcher's own albums, because
+     * "Удалить игру" removes this whole instance and a child's photos must not
+     * go with it.
+     */
+    photosInbox: node_path.join(instance, "kodland-photos", "inbox"),
     /** Records which packVersion produced the current contents. */
     stateFile: node_path.join(instance, "pack-state.json")
   };
@@ -315,8 +386,8 @@ async function ensureGameOptions(instanceDir) {
   } catch {
   }
   const body = Object.entries(DEFAULTS).map(([key, value]) => `${key}:${value}`).join("\n");
-  await promises.writeFile(path, `${body}
-`, "utf8");
+  await writeFileAtomic(path, `${body}
+`);
   return { written: true };
 }
 async function applyWindowedDefault(instanceDir) {
@@ -334,7 +405,7 @@ async function applyWindowedDefault(instanceDir) {
   }
   if (lines[at] === "fullscreen:false") return { changed: false, reason: "already-windowed" };
   lines[at] = "fullscreen:false";
-  await promises.writeFile(path, lines.join("\n"), "utf8");
+  await writeFileAtomic(path, lines.join("\n"));
   return { changed: true };
 }
 var _a$1;
@@ -1026,15 +1097,15 @@ const $ZodCheckLessThan = /* @__PURE__ */ $constructor("$ZodCheckLessThan", (ins
         bag.exclusiveMaximum = def.value;
     }
   });
-  inst._zod.check = (payload) => {
-    if (def.inclusive ? payload.value <= def.value : payload.value < def.value) {
+  inst._zod.check = (payload2) => {
+    if (def.inclusive ? payload2.value <= def.value : payload2.value < def.value) {
       return;
     }
-    payload.issues.push({
+    payload2.issues.push({
       origin,
       code: "too_big",
       maximum: typeof def.value === "object" ? def.value.getTime() : def.value,
-      input: payload.value,
+      input: payload2.value,
       inclusive: def.inclusive,
       inst,
       continue: !def.abort
@@ -1054,15 +1125,15 @@ const $ZodCheckGreaterThan = /* @__PURE__ */ $constructor("$ZodCheckGreaterThan"
         bag.exclusiveMinimum = def.value;
     }
   });
-  inst._zod.check = (payload) => {
-    if (def.inclusive ? payload.value >= def.value : payload.value > def.value) {
+  inst._zod.check = (payload2) => {
+    if (def.inclusive ? payload2.value >= def.value : payload2.value > def.value) {
       return;
     }
-    payload.issues.push({
+    payload2.issues.push({
       origin,
       code: "too_small",
       minimum: typeof def.value === "object" ? def.value.getTime() : def.value,
-      input: payload.value,
+      input: payload2.value,
       inclusive: def.inclusive,
       inst,
       continue: !def.abort
@@ -1075,17 +1146,17 @@ const $ZodCheckMultipleOf = /* @__PURE__ */ $constructor("$ZodCheckMultipleOf", 
     var _a2;
     (_a2 = inst2._zod.bag).multipleOf ?? (_a2.multipleOf = def.value);
   });
-  inst._zod.check = (payload) => {
-    if (typeof payload.value !== typeof def.value)
+  inst._zod.check = (payload2) => {
+    if (typeof payload2.value !== typeof def.value)
       throw new Error("Cannot mix number and bigint in multiple_of check.");
-    const isMultiple = typeof payload.value === "bigint" ? payload.value % def.value === BigInt(0) : floatSafeRemainder(payload.value, def.value) === 0;
+    const isMultiple = typeof payload2.value === "bigint" ? payload2.value % def.value === BigInt(0) : floatSafeRemainder(payload2.value, def.value) === 0;
     if (isMultiple)
       return;
-    payload.issues.push({
-      origin: typeof payload.value,
+    payload2.issues.push({
+      origin: typeof payload2.value,
       code: "not_multiple_of",
       divisor: def.value,
-      input: payload.value,
+      input: payload2.value,
       inst,
       continue: !def.abort
     });
@@ -1105,11 +1176,11 @@ const $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberForma
     if (isInt)
       bag.pattern = integer;
   });
-  inst._zod.check = (payload) => {
-    const input = payload.value;
+  inst._zod.check = (payload2) => {
+    const input = payload2.value;
     if (isInt) {
       if (!Number.isInteger(input)) {
-        payload.issues.push({
+        payload2.issues.push({
           expected: origin,
           format: def.format,
           code: "invalid_type",
@@ -1121,7 +1192,7 @@ const $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberForma
       }
       if (!Number.isSafeInteger(input)) {
         if (input > 0) {
-          payload.issues.push({
+          payload2.issues.push({
             input,
             code: "too_big",
             maximum: Number.MAX_SAFE_INTEGER,
@@ -1132,7 +1203,7 @@ const $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberForma
             continue: !def.abort
           });
         } else {
-          payload.issues.push({
+          payload2.issues.push({
             input,
             code: "too_small",
             minimum: Number.MIN_SAFE_INTEGER,
@@ -1147,7 +1218,7 @@ const $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberForma
       }
     }
     if (input < minimum) {
-      payload.issues.push({
+      payload2.issues.push({
         origin: "number",
         input,
         code: "too_small",
@@ -1158,7 +1229,7 @@ const $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberForma
       });
     }
     if (input > maximum) {
-      payload.issues.push({
+      payload2.issues.push({
         origin: "number",
         input,
         code: "too_big",
@@ -1173,8 +1244,8 @@ const $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberForma
 const $ZodCheckMaxLength = /* @__PURE__ */ $constructor("$ZodCheckMaxLength", (inst, def) => {
   var _a2;
   $ZodCheck.init(inst, def);
-  (_a2 = inst._zod.def).when ?? (_a2.when = (payload) => {
-    const val = payload.value;
+  (_a2 = inst._zod.def).when ?? (_a2.when = (payload2) => {
+    const val = payload2.value;
     return !nullish(val) && val.length !== void 0;
   });
   inst._zod.onattach.push((inst2) => {
@@ -1182,13 +1253,13 @@ const $ZodCheckMaxLength = /* @__PURE__ */ $constructor("$ZodCheckMaxLength", (i
     if (def.maximum < curr)
       inst2._zod.bag.maximum = def.maximum;
   });
-  inst._zod.check = (payload) => {
-    const input = payload.value;
+  inst._zod.check = (payload2) => {
+    const input = payload2.value;
     const length = input.length;
     if (length <= def.maximum)
       return;
     const origin = getLengthableOrigin(input);
-    payload.issues.push({
+    payload2.issues.push({
       origin,
       code: "too_big",
       maximum: def.maximum,
@@ -1202,8 +1273,8 @@ const $ZodCheckMaxLength = /* @__PURE__ */ $constructor("$ZodCheckMaxLength", (i
 const $ZodCheckMinLength = /* @__PURE__ */ $constructor("$ZodCheckMinLength", (inst, def) => {
   var _a2;
   $ZodCheck.init(inst, def);
-  (_a2 = inst._zod.def).when ?? (_a2.when = (payload) => {
-    const val = payload.value;
+  (_a2 = inst._zod.def).when ?? (_a2.when = (payload2) => {
+    const val = payload2.value;
     return !nullish(val) && val.length !== void 0;
   });
   inst._zod.onattach.push((inst2) => {
@@ -1211,13 +1282,13 @@ const $ZodCheckMinLength = /* @__PURE__ */ $constructor("$ZodCheckMinLength", (i
     if (def.minimum > curr)
       inst2._zod.bag.minimum = def.minimum;
   });
-  inst._zod.check = (payload) => {
-    const input = payload.value;
+  inst._zod.check = (payload2) => {
+    const input = payload2.value;
     const length = input.length;
     if (length >= def.minimum)
       return;
     const origin = getLengthableOrigin(input);
-    payload.issues.push({
+    payload2.issues.push({
       origin,
       code: "too_small",
       minimum: def.minimum,
@@ -1231,8 +1302,8 @@ const $ZodCheckMinLength = /* @__PURE__ */ $constructor("$ZodCheckMinLength", (i
 const $ZodCheckLengthEquals = /* @__PURE__ */ $constructor("$ZodCheckLengthEquals", (inst, def) => {
   var _a2;
   $ZodCheck.init(inst, def);
-  (_a2 = inst._zod.def).when ?? (_a2.when = (payload) => {
-    const val = payload.value;
+  (_a2 = inst._zod.def).when ?? (_a2.when = (payload2) => {
+    const val = payload2.value;
     return !nullish(val) && val.length !== void 0;
   });
   inst._zod.onattach.push((inst2) => {
@@ -1241,19 +1312,19 @@ const $ZodCheckLengthEquals = /* @__PURE__ */ $constructor("$ZodCheckLengthEqual
     bag.maximum = def.length;
     bag.length = def.length;
   });
-  inst._zod.check = (payload) => {
-    const input = payload.value;
+  inst._zod.check = (payload2) => {
+    const input = payload2.value;
     const length = input.length;
     if (length === def.length)
       return;
     const origin = getLengthableOrigin(input);
     const tooBig = length > def.length;
-    payload.issues.push({
+    payload2.issues.push({
       origin,
       ...tooBig ? { code: "too_big", maximum: def.length } : { code: "too_small", minimum: def.length },
       inclusive: true,
       exact: true,
-      input: payload.value,
+      input: payload2.value,
       inst,
       continue: !def.abort
     });
@@ -1271,15 +1342,15 @@ const $ZodCheckStringFormat = /* @__PURE__ */ $constructor("$ZodCheckStringForma
     }
   });
   if (def.pattern)
-    (_a2 = inst._zod).check ?? (_a2.check = (payload) => {
+    (_a2 = inst._zod).check ?? (_a2.check = (payload2) => {
       def.pattern.lastIndex = 0;
-      if (def.pattern.test(payload.value))
+      if (def.pattern.test(payload2.value))
         return;
-      payload.issues.push({
+      payload2.issues.push({
         origin: "string",
         code: "invalid_format",
         format: def.format,
-        input: payload.value,
+        input: payload2.value,
         ...def.pattern ? { pattern: def.pattern.toString() } : {},
         inst,
         continue: !def.abort
@@ -1291,15 +1362,15 @@ const $ZodCheckStringFormat = /* @__PURE__ */ $constructor("$ZodCheckStringForma
 });
 const $ZodCheckRegex = /* @__PURE__ */ $constructor("$ZodCheckRegex", (inst, def) => {
   $ZodCheckStringFormat.init(inst, def);
-  inst._zod.check = (payload) => {
+  inst._zod.check = (payload2) => {
     def.pattern.lastIndex = 0;
-    if (def.pattern.test(payload.value))
+    if (def.pattern.test(payload2.value))
       return;
-    payload.issues.push({
+    payload2.issues.push({
       origin: "string",
       code: "invalid_format",
       format: "regex",
-      input: payload.value,
+      input: payload2.value,
       pattern: def.pattern.toString(),
       inst,
       continue: !def.abort
@@ -1324,15 +1395,15 @@ const $ZodCheckIncludes = /* @__PURE__ */ $constructor("$ZodCheckIncludes", (ins
     bag.patterns ?? (bag.patterns = /* @__PURE__ */ new Set());
     bag.patterns.add(pattern);
   });
-  inst._zod.check = (payload) => {
-    if (payload.value.includes(def.includes, def.position))
+  inst._zod.check = (payload2) => {
+    if (payload2.value.includes(def.includes, def.position))
       return;
-    payload.issues.push({
+    payload2.issues.push({
       origin: "string",
       code: "invalid_format",
       format: "includes",
       includes: def.includes,
-      input: payload.value,
+      input: payload2.value,
       inst,
       continue: !def.abort
     });
@@ -1347,15 +1418,15 @@ const $ZodCheckStartsWith = /* @__PURE__ */ $constructor("$ZodCheckStartsWith", 
     bag.patterns ?? (bag.patterns = /* @__PURE__ */ new Set());
     bag.patterns.add(pattern);
   });
-  inst._zod.check = (payload) => {
-    if (payload.value.startsWith(def.prefix))
+  inst._zod.check = (payload2) => {
+    if (payload2.value.startsWith(def.prefix))
       return;
-    payload.issues.push({
+    payload2.issues.push({
       origin: "string",
       code: "invalid_format",
       format: "starts_with",
       prefix: def.prefix,
-      input: payload.value,
+      input: payload2.value,
       inst,
       continue: !def.abort
     });
@@ -1370,15 +1441,15 @@ const $ZodCheckEndsWith = /* @__PURE__ */ $constructor("$ZodCheckEndsWith", (ins
     bag.patterns ?? (bag.patterns = /* @__PURE__ */ new Set());
     bag.patterns.add(pattern);
   });
-  inst._zod.check = (payload) => {
-    if (payload.value.endsWith(def.suffix))
+  inst._zod.check = (payload2) => {
+    if (payload2.value.endsWith(def.suffix))
       return;
-    payload.issues.push({
+    payload2.issues.push({
       origin: "string",
       code: "invalid_format",
       format: "ends_with",
       suffix: def.suffix,
-      input: payload.value,
+      input: payload2.value,
       inst,
       continue: !def.abort
     });
@@ -1386,8 +1457,8 @@ const $ZodCheckEndsWith = /* @__PURE__ */ $constructor("$ZodCheckEndsWith", (ins
 });
 const $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (inst, def) => {
   $ZodCheck.init(inst, def);
-  inst._zod.check = (payload) => {
-    payload.value = def.tx(payload.value);
+  inst._zod.check = (payload2) => {
+    payload2.value = def.tx(payload2.value);
   };
 });
 class Doc {
@@ -1450,54 +1521,54 @@ const $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
       inst._zod.run = inst._zod.parse;
     });
   } else {
-    const runChecks = (payload, checks2, ctx) => {
-      let isAborted = aborted(payload);
+    const runChecks = (payload2, checks2, ctx) => {
+      let isAborted = aborted(payload2);
       let asyncResult;
       for (const ch of checks2) {
         if (ch._zod.def.when) {
-          if (explicitlyAborted(payload))
+          if (explicitlyAborted(payload2))
             continue;
-          const shouldRun = ch._zod.def.when(payload);
+          const shouldRun = ch._zod.def.when(payload2);
           if (!shouldRun)
             continue;
         } else if (isAborted) {
           continue;
         }
-        const currLen = payload.issues.length;
-        const _ = ch._zod.check(payload);
+        const currLen = payload2.issues.length;
+        const _ = ch._zod.check(payload2);
         if (_ instanceof Promise && ctx?.async === false) {
           throw new $ZodAsyncError();
         }
         if (asyncResult || _ instanceof Promise) {
           asyncResult = (asyncResult ?? Promise.resolve()).then(async () => {
             await _;
-            const nextLen = payload.issues.length;
+            const nextLen = payload2.issues.length;
             if (nextLen === currLen)
               return;
             if (!isAborted)
-              isAborted = aborted(payload, currLen);
+              isAborted = aborted(payload2, currLen);
           });
         } else {
-          const nextLen = payload.issues.length;
+          const nextLen = payload2.issues.length;
           if (nextLen === currLen)
             continue;
           if (!isAborted)
-            isAborted = aborted(payload, currLen);
+            isAborted = aborted(payload2, currLen);
         }
       }
       if (asyncResult) {
         return asyncResult.then(() => {
-          return payload;
+          return payload2;
         });
       }
-      return payload;
+      return payload2;
     };
-    const handleCanaryResult = (canary, payload, ctx) => {
+    const handleCanaryResult = (canary, payload2, ctx) => {
       if (aborted(canary)) {
         canary.aborted = true;
         return canary;
       }
-      const checkResult = runChecks(payload, checks, ctx);
+      const checkResult = runChecks(payload2, checks, ctx);
       if (checkResult instanceof Promise) {
         if (ctx.async === false)
           throw new $ZodAsyncError();
@@ -1505,20 +1576,20 @@ const $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
       }
       return inst._zod.parse(checkResult, ctx);
     };
-    inst._zod.run = (payload, ctx) => {
+    inst._zod.run = (payload2, ctx) => {
       if (ctx.skipChecks) {
-        return inst._zod.parse(payload, ctx);
+        return inst._zod.parse(payload2, ctx);
       }
       if (ctx.direction === "backward") {
-        const canary = inst._zod.parse({ value: payload.value, issues: [] }, { ...ctx, skipChecks: true });
+        const canary = inst._zod.parse({ value: payload2.value, issues: [] }, { ...ctx, skipChecks: true });
         if (canary instanceof Promise) {
           return canary.then((canary2) => {
-            return handleCanaryResult(canary2, payload, ctx);
+            return handleCanaryResult(canary2, payload2, ctx);
           });
         }
-        return handleCanaryResult(canary, payload, ctx);
+        return handleCanaryResult(canary, payload2, ctx);
       }
-      const result = inst._zod.parse(payload, ctx);
+      const result = inst._zod.parse(payload2, ctx);
       if (result instanceof Promise) {
         if (ctx.async === false)
           throw new $ZodAsyncError();
@@ -1543,21 +1614,21 @@ const $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
 const $ZodString = /* @__PURE__ */ $constructor("$ZodString", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.pattern = [...inst?._zod.bag?.patterns ?? []].pop() ?? string$1(inst._zod.bag);
-  inst._zod.parse = (payload, _) => {
+  inst._zod.parse = (payload2, _) => {
     if (def.coerce)
       try {
-        payload.value = String(payload.value);
+        payload2.value = String(payload2.value);
       } catch (_2) {
       }
-    if (typeof payload.value === "string")
-      return payload;
-    payload.issues.push({
+    if (typeof payload2.value === "string")
+      return payload2;
+    payload2.issues.push({
       expected: "string",
       code: "invalid_type",
-      input: payload.value,
+      input: payload2.value,
       inst
     });
-    return payload;
+    return payload2;
   };
 });
 const $ZodStringFormat = /* @__PURE__ */ $constructor("$ZodStringFormat", (inst, def) => {
@@ -1594,16 +1665,16 @@ const $ZodEmail = /* @__PURE__ */ $constructor("$ZodEmail", (inst, def) => {
 });
 const $ZodURL = /* @__PURE__ */ $constructor("$ZodURL", (inst, def) => {
   $ZodStringFormat.init(inst, def);
-  inst._zod.check = (payload) => {
+  inst._zod.check = (payload2) => {
     try {
-      const trimmed = payload.value.trim();
+      const trimmed = payload2.value.trim();
       if (!def.normalize && def.protocol?.source === httpProtocol.source) {
         if (!/^https?:\/\//i.test(trimmed)) {
-          payload.issues.push({
+          payload2.issues.push({
             code: "invalid_format",
             format: "url",
             note: "Invalid URL format",
-            input: payload.value,
+            input: payload2.value,
             inst,
             continue: !def.abort
           });
@@ -1614,12 +1685,12 @@ const $ZodURL = /* @__PURE__ */ $constructor("$ZodURL", (inst, def) => {
       if (def.hostname) {
         def.hostname.lastIndex = 0;
         if (!def.hostname.test(url.hostname)) {
-          payload.issues.push({
+          payload2.issues.push({
             code: "invalid_format",
             format: "url",
             note: "Invalid hostname",
             pattern: def.hostname.source,
-            input: payload.value,
+            input: payload2.value,
             inst,
             continue: !def.abort
           });
@@ -1628,28 +1699,28 @@ const $ZodURL = /* @__PURE__ */ $constructor("$ZodURL", (inst, def) => {
       if (def.protocol) {
         def.protocol.lastIndex = 0;
         if (!def.protocol.test(url.protocol.endsWith(":") ? url.protocol.slice(0, -1) : url.protocol)) {
-          payload.issues.push({
+          payload2.issues.push({
             code: "invalid_format",
             format: "url",
             note: "Invalid protocol",
             pattern: def.protocol.source,
-            input: payload.value,
+            input: payload2.value,
             inst,
             continue: !def.abort
           });
         }
       }
       if (def.normalize) {
-        payload.value = url.href;
+        payload2.value = url.href;
       } else {
-        payload.value = trimmed;
+        payload2.value = trimmed;
       }
       return;
     } catch (_) {
-      payload.issues.push({
+      payload2.issues.push({
         code: "invalid_format",
         format: "url",
-        input: payload.value,
+        input: payload2.value,
         inst,
         continue: !def.abort
       });
@@ -1709,14 +1780,14 @@ const $ZodIPv6 = /* @__PURE__ */ $constructor("$ZodIPv6", (inst, def) => {
   def.pattern ?? (def.pattern = ipv6);
   $ZodStringFormat.init(inst, def);
   inst._zod.bag.format = `ipv6`;
-  inst._zod.check = (payload) => {
+  inst._zod.check = (payload2) => {
     try {
-      new URL(`http://[${payload.value}]`);
+      new URL(`http://[${payload2.value}]`);
     } catch {
-      payload.issues.push({
+      payload2.issues.push({
         code: "invalid_format",
         format: "ipv6",
-        input: payload.value,
+        input: payload2.value,
         inst,
         continue: !def.abort
       });
@@ -1730,8 +1801,8 @@ const $ZodCIDRv4 = /* @__PURE__ */ $constructor("$ZodCIDRv4", (inst, def) => {
 const $ZodCIDRv6 = /* @__PURE__ */ $constructor("$ZodCIDRv6", (inst, def) => {
   def.pattern ?? (def.pattern = cidrv6);
   $ZodStringFormat.init(inst, def);
-  inst._zod.check = (payload) => {
-    const parts = payload.value.split("/");
+  inst._zod.check = (payload2) => {
+    const parts = payload2.value.split("/");
     try {
       if (parts.length !== 2)
         throw new Error();
@@ -1745,10 +1816,10 @@ const $ZodCIDRv6 = /* @__PURE__ */ $constructor("$ZodCIDRv6", (inst, def) => {
         throw new Error();
       new URL(`http://[${address}]`);
     } catch {
-      payload.issues.push({
+      payload2.issues.push({
         code: "invalid_format",
         format: "cidrv6",
-        input: payload.value,
+        input: payload2.value,
         inst,
         continue: !def.abort
       });
@@ -1773,13 +1844,13 @@ const $ZodBase64 = /* @__PURE__ */ $constructor("$ZodBase64", (inst, def) => {
   def.pattern ?? (def.pattern = base64$1);
   $ZodStringFormat.init(inst, def);
   inst._zod.bag.contentEncoding = "base64";
-  inst._zod.check = (payload) => {
-    if (isValidBase64(payload.value))
+  inst._zod.check = (payload2) => {
+    if (isValidBase64(payload2.value))
       return;
-    payload.issues.push({
+    payload2.issues.push({
       code: "invalid_format",
       format: "base64",
-      input: payload.value,
+      input: payload2.value,
       inst,
       continue: !def.abort
     });
@@ -1796,13 +1867,13 @@ const $ZodBase64URL = /* @__PURE__ */ $constructor("$ZodBase64URL", (inst, def) 
   def.pattern ?? (def.pattern = base64url);
   $ZodStringFormat.init(inst, def);
   inst._zod.bag.contentEncoding = "base64url";
-  inst._zod.check = (payload) => {
-    if (isValidBase64URL(payload.value))
+  inst._zod.check = (payload2) => {
+    if (isValidBase64URL(payload2.value))
       return;
-    payload.issues.push({
+    payload2.issues.push({
       code: "invalid_format",
       format: "base64url",
-      input: payload.value,
+      input: payload2.value,
       inst,
       continue: !def.abort
     });
@@ -1834,13 +1905,13 @@ function isValidJWT(token, algorithm = null) {
 }
 const $ZodJWT = /* @__PURE__ */ $constructor("$ZodJWT", (inst, def) => {
   $ZodStringFormat.init(inst, def);
-  inst._zod.check = (payload) => {
-    if (isValidJWT(payload.value, def.alg))
+  inst._zod.check = (payload2) => {
+    if (isValidJWT(payload2.value, def.alg))
       return;
-    payload.issues.push({
+    payload2.issues.push({
       code: "invalid_format",
       format: "jwt",
-      input: payload.value,
+      input: payload2.value,
       inst,
       continue: !def.abort
     });
@@ -1849,25 +1920,25 @@ const $ZodJWT = /* @__PURE__ */ $constructor("$ZodJWT", (inst, def) => {
 const $ZodNumber = /* @__PURE__ */ $constructor("$ZodNumber", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.pattern = inst._zod.bag.pattern ?? number$1;
-  inst._zod.parse = (payload, _ctx) => {
+  inst._zod.parse = (payload2, _ctx) => {
     if (def.coerce)
       try {
-        payload.value = Number(payload.value);
+        payload2.value = Number(payload2.value);
       } catch (_) {
       }
-    const input = payload.value;
+    const input = payload2.value;
     if (typeof input === "number" && !Number.isNaN(input) && Number.isFinite(input)) {
-      return payload;
+      return payload2;
     }
     const received = typeof input === "number" ? Number.isNaN(input) ? "NaN" : !Number.isFinite(input) ? "Infinity" : void 0 : void 0;
-    payload.issues.push({
+    payload2.issues.push({
       expected: "number",
       code: "invalid_type",
       input,
       inst,
       ...received ? { received } : {}
     });
-    return payload;
+    return payload2;
   };
 });
 const $ZodNumberFormat = /* @__PURE__ */ $constructor("$ZodNumberFormat", (inst, def) => {
@@ -1877,38 +1948,38 @@ const $ZodNumberFormat = /* @__PURE__ */ $constructor("$ZodNumberFormat", (inst,
 const $ZodBoolean = /* @__PURE__ */ $constructor("$ZodBoolean", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.pattern = boolean$1;
-  inst._zod.parse = (payload, _ctx) => {
+  inst._zod.parse = (payload2, _ctx) => {
     if (def.coerce)
       try {
-        payload.value = Boolean(payload.value);
+        payload2.value = Boolean(payload2.value);
       } catch (_) {
       }
-    const input = payload.value;
+    const input = payload2.value;
     if (typeof input === "boolean")
-      return payload;
-    payload.issues.push({
+      return payload2;
+    payload2.issues.push({
       expected: "boolean",
       code: "invalid_type",
       input,
       inst
     });
-    return payload;
+    return payload2;
   };
 });
 const $ZodUnknown = /* @__PURE__ */ $constructor("$ZodUnknown", (inst, def) => {
   $ZodType.init(inst, def);
-  inst._zod.parse = (payload) => payload;
+  inst._zod.parse = (payload2) => payload2;
 });
 const $ZodNever = /* @__PURE__ */ $constructor("$ZodNever", (inst, def) => {
   $ZodType.init(inst, def);
-  inst._zod.parse = (payload, _ctx) => {
-    payload.issues.push({
+  inst._zod.parse = (payload2, _ctx) => {
+    payload2.issues.push({
       expected: "never",
       code: "invalid_type",
-      input: payload.value,
+      input: payload2.value,
       inst
     });
-    return payload;
+    return payload2;
   };
 });
 function handleArrayResult(result, final, index) {
@@ -1919,18 +1990,18 @@ function handleArrayResult(result, final, index) {
 }
 const $ZodArray = /* @__PURE__ */ $constructor("$ZodArray", (inst, def) => {
   $ZodType.init(inst, def);
-  inst._zod.parse = (payload, ctx) => {
-    const input = payload.value;
+  inst._zod.parse = (payload2, ctx) => {
+    const input = payload2.value;
     if (!Array.isArray(input)) {
-      payload.issues.push({
+      payload2.issues.push({
         expected: "array",
         code: "invalid_type",
         input,
         inst
       });
-      return payload;
+      return payload2;
     }
-    payload.value = Array(input.length);
+    payload2.value = Array(input.length);
     const proms = [];
     for (let i = 0; i < input.length; i++) {
       const item = input[i];
@@ -1939,15 +2010,15 @@ const $ZodArray = /* @__PURE__ */ $constructor("$ZodArray", (inst, def) => {
         issues: []
       }, ctx);
       if (result instanceof Promise) {
-        proms.push(result.then((result2) => handleArrayResult(result2, payload, i)));
+        proms.push(result.then((result2) => handleArrayResult(result2, payload2, i)));
       } else {
-        handleArrayResult(result, payload, i);
+        handleArrayResult(result, payload2, i);
       }
     }
     if (proms.length) {
-      return Promise.all(proms).then(() => payload);
+      return Promise.all(proms).then(() => payload2);
     }
-    return payload;
+    return payload2;
   };
 });
 function handlePropertyResult(result, final, key, input, isOptionalIn, isOptionalOut) {
@@ -1993,7 +2064,7 @@ function normalizeDef(def) {
     optionalKeys: new Set(okeys)
   };
 }
-function handleCatchall(proms, input, payload, ctx, def, inst) {
+function handleCatchall(proms, input, payload2, ctx, def, inst) {
   const unrecognized = [];
   const keySet = def.keySet;
   const _catchall = def.catchall._zod;
@@ -2011,13 +2082,13 @@ function handleCatchall(proms, input, payload, ctx, def, inst) {
     }
     const r = _catchall.run({ value: input[key], issues: [] }, ctx);
     if (r instanceof Promise) {
-      proms.push(r.then((r2) => handlePropertyResult(r2, payload, key, input, isOptionalIn, isOptionalOut)));
+      proms.push(r.then((r2) => handlePropertyResult(r2, payload2, key, input, isOptionalIn, isOptionalOut)));
     } else {
-      handlePropertyResult(r, payload, key, input, isOptionalIn, isOptionalOut);
+      handlePropertyResult(r, payload2, key, input, isOptionalIn, isOptionalOut);
     }
   }
   if (unrecognized.length) {
-    payload.issues.push({
+    payload2.issues.push({
       code: "unrecognized_keys",
       keys: unrecognized,
       input,
@@ -2025,9 +2096,9 @@ function handleCatchall(proms, input, payload, ctx, def, inst) {
     });
   }
   if (!proms.length)
-    return payload;
+    return payload2;
   return Promise.all(proms).then(() => {
-    return payload;
+    return payload2;
   });
 }
 const $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
@@ -2062,19 +2133,19 @@ const $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
   const isObject$1 = isObject;
   const catchall = def.catchall;
   let value;
-  inst._zod.parse = (payload, ctx) => {
+  inst._zod.parse = (payload2, ctx) => {
     value ?? (value = _normalized.value);
-    const input = payload.value;
+    const input = payload2.value;
     if (!isObject$1(input)) {
-      payload.issues.push({
+      payload2.issues.push({
         expected: "object",
         code: "invalid_type",
         input,
         inst
       });
-      return payload;
+      return payload2;
     }
-    payload.value = {};
+    payload2.value = {};
     const proms = [];
     const shape = value.shape;
     for (const key of value.keys) {
@@ -2083,15 +2154,15 @@ const $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
       const isOptionalOut = el._zod.optout === "optional";
       const r = el._zod.run({ value: input[key], issues: [] }, ctx);
       if (r instanceof Promise) {
-        proms.push(r.then((r2) => handlePropertyResult(r2, payload, key, input, isOptionalIn, isOptionalOut)));
+        proms.push(r.then((r2) => handlePropertyResult(r2, payload2, key, input, isOptionalIn, isOptionalOut)));
       } else {
-        handlePropertyResult(r, payload, key, input, isOptionalIn, isOptionalOut);
+        handlePropertyResult(r, payload2, key, input, isOptionalIn, isOptionalOut);
       }
     }
     if (!catchall) {
-      return proms.length ? Promise.all(proms).then(() => payload) : payload;
+      return proms.length ? Promise.all(proms).then(() => payload2) : payload2;
     }
-    return handleCatchall(proms, input, payload, ctx, _normalized.value, inst);
+    return handleCatchall(proms, input, payload2, ctx, _normalized.value, inst);
   };
 });
 const $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) => {
@@ -2189,7 +2260,7 @@ const $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) 
     doc2.write(`payload.value = newResult;`);
     doc2.write(`return payload;`);
     const fn = doc2.compile();
-    return (payload, ctx) => fn(shape, payload, ctx);
+    return (payload2, ctx) => fn(shape, payload2, ctx);
   };
   let fastpass;
   const isObject$1 = isObject;
@@ -2198,27 +2269,27 @@ const $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) 
   const fastEnabled = jit && allowsEval$1.value;
   const catchall = def.catchall;
   let value;
-  inst._zod.parse = (payload, ctx) => {
+  inst._zod.parse = (payload2, ctx) => {
     value ?? (value = _normalized.value);
-    const input = payload.value;
+    const input = payload2.value;
     if (!isObject$1(input)) {
-      payload.issues.push({
+      payload2.issues.push({
         expected: "object",
         code: "invalid_type",
         input,
         inst
       });
-      return payload;
+      return payload2;
     }
     if (jit && fastEnabled && ctx?.async === false && ctx.jitless !== true) {
       if (!fastpass)
         fastpass = generateFastpass(def.shape);
-      payload = fastpass(payload, ctx);
+      payload2 = fastpass(payload2, ctx);
       if (!catchall)
-        return payload;
-      return handleCatchall([], input, payload, ctx, value, inst);
+        return payload2;
+      return handleCatchall([], input, payload2, ctx, value, inst);
     }
-    return superParse(payload, ctx);
+    return superParse(payload2, ctx);
   };
 });
 function handleUnionResults(results, final, inst, ctx) {
@@ -2259,15 +2330,15 @@ const $ZodUnion = /* @__PURE__ */ $constructor("$ZodUnion", (inst, def) => {
     return void 0;
   });
   const first = def.options.length === 1 ? def.options[0]._zod.run : null;
-  inst._zod.parse = (payload, ctx) => {
+  inst._zod.parse = (payload2, ctx) => {
     if (first) {
-      return first(payload, ctx);
+      return first(payload2, ctx);
     }
     let async = false;
     const results = [];
     for (const option of def.options) {
       const result = option._zod.run({
-        value: payload.value,
+        value: payload2.value,
         issues: []
       }, ctx);
       if (result instanceof Promise) {
@@ -2280,25 +2351,92 @@ const $ZodUnion = /* @__PURE__ */ $constructor("$ZodUnion", (inst, def) => {
       }
     }
     if (!async)
-      return handleUnionResults(results, payload, inst, ctx);
+      return handleUnionResults(results, payload2, inst, ctx);
     return Promise.all(results).then((results2) => {
-      return handleUnionResults(results2, payload, inst, ctx);
+      return handleUnionResults(results2, payload2, inst, ctx);
     });
+  };
+});
+const $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor("$ZodDiscriminatedUnion", (inst, def) => {
+  def.inclusive = false;
+  $ZodUnion.init(inst, def);
+  const _super = inst._zod.parse;
+  defineLazy(inst._zod, "propValues", () => {
+    const propValues = {};
+    for (const option of def.options) {
+      const pv = option._zod.propValues;
+      if (!pv || Object.keys(pv).length === 0)
+        throw new Error(`Invalid discriminated union option at index "${def.options.indexOf(option)}"`);
+      for (const [k, v] of Object.entries(pv)) {
+        if (!propValues[k])
+          propValues[k] = /* @__PURE__ */ new Set();
+        for (const val of v) {
+          propValues[k].add(val);
+        }
+      }
+    }
+    return propValues;
+  });
+  const disc = cached(() => {
+    const opts = def.options;
+    const map = /* @__PURE__ */ new Map();
+    for (const o of opts) {
+      const values = o._zod.propValues?.[def.discriminator];
+      if (!values || values.size === 0)
+        throw new Error(`Invalid discriminated union option at index "${def.options.indexOf(o)}"`);
+      for (const v of values) {
+        if (map.has(v)) {
+          throw new Error(`Duplicate discriminator value "${String(v)}"`);
+        }
+        map.set(v, o);
+      }
+    }
+    return map;
+  });
+  inst._zod.parse = (payload2, ctx) => {
+    const input = payload2.value;
+    if (!isObject(input)) {
+      payload2.issues.push({
+        code: "invalid_type",
+        expected: "object",
+        input,
+        inst
+      });
+      return payload2;
+    }
+    const opt = disc.value.get(input?.[def.discriminator]);
+    if (opt) {
+      return opt._zod.run(payload2, ctx);
+    }
+    if (def.unionFallback || ctx.direction === "backward") {
+      return _super(payload2, ctx);
+    }
+    payload2.issues.push({
+      code: "invalid_union",
+      errors: [],
+      note: "No matching discriminator",
+      discriminator: def.discriminator,
+      options: Array.from(disc.value.keys()),
+      input,
+      path: [def.discriminator],
+      inst
+    });
+    return payload2;
   };
 });
 const $ZodIntersection = /* @__PURE__ */ $constructor("$ZodIntersection", (inst, def) => {
   $ZodType.init(inst, def);
-  inst._zod.parse = (payload, ctx) => {
-    const input = payload.value;
+  inst._zod.parse = (payload2, ctx) => {
+    const input = payload2.value;
     const left = def.left._zod.run({ value: input, issues: [] }, ctx);
     const right = def.right._zod.run({ value: input, issues: [] }, ctx);
     const async = left instanceof Promise || right instanceof Promise;
     if (async) {
       return Promise.all([left, right]).then(([left2, right2]) => {
-        return handleIntersectionResults(payload, left2, right2);
+        return handleIntersectionResults(payload2, left2, right2);
       });
     }
-    return handleIntersectionResults(payload, left, right);
+    return handleIntersectionResults(payload2, left, right);
   };
 });
 function mergeValues(a, b) {
@@ -2386,21 +2524,21 @@ function handleIntersectionResults(result, left, right) {
 }
 const $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
   $ZodType.init(inst, def);
-  inst._zod.parse = (payload, ctx) => {
-    const input = payload.value;
+  inst._zod.parse = (payload2, ctx) => {
+    const input = payload2.value;
     if (!isPlainObject(input)) {
-      payload.issues.push({
+      payload2.issues.push({
         expected: "record",
         code: "invalid_type",
         input,
         inst
       });
-      return payload;
+      return payload2;
     }
     const proms = [];
     const values = def.keyType._zod.values;
     if (values) {
-      payload.value = {};
+      payload2.value = {};
       const recordKeys = /* @__PURE__ */ new Set();
       for (const key of values) {
         if (typeof key === "string" || typeof key === "number" || typeof key === "symbol") {
@@ -2410,7 +2548,7 @@ const $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
             throw new Error("Async schemas not supported in object keys currently");
           }
           if (keyResult.issues.length) {
-            payload.issues.push({
+            payload2.issues.push({
               code: "invalid_key",
               origin: "record",
               issues: keyResult.issues.map((iss) => finalizeIssue(iss, ctx, config())),
@@ -2425,15 +2563,15 @@ const $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
           if (result instanceof Promise) {
             proms.push(result.then((result2) => {
               if (result2.issues.length) {
-                payload.issues.push(...prefixIssues(key, result2.issues));
+                payload2.issues.push(...prefixIssues(key, result2.issues));
               }
-              payload.value[outKey] = result2.value;
+              payload2.value[outKey] = result2.value;
             }));
           } else {
             if (result.issues.length) {
-              payload.issues.push(...prefixIssues(key, result.issues));
+              payload2.issues.push(...prefixIssues(key, result.issues));
             }
-            payload.value[outKey] = result.value;
+            payload2.value[outKey] = result.value;
           }
         }
       }
@@ -2445,7 +2583,7 @@ const $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
         }
       }
       if (unrecognized && unrecognized.length > 0) {
-        payload.issues.push({
+        payload2.issues.push({
           code: "unrecognized_keys",
           input,
           inst,
@@ -2453,7 +2591,7 @@ const $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
         });
       }
     } else {
-      payload.value = {};
+      payload2.value = {};
       for (const key of Reflect.ownKeys(input)) {
         if (key === "__proto__")
           continue;
@@ -2475,9 +2613,9 @@ const $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
         }
         if (keyResult.issues.length) {
           if (def.mode === "loose") {
-            payload.value[key] = input[key];
+            payload2.value[key] = input[key];
           } else {
-            payload.issues.push({
+            payload2.issues.push({
               code: "invalid_key",
               origin: "record",
               issues: keyResult.issues.map((iss) => finalizeIssue(iss, ctx, config())),
@@ -2492,22 +2630,22 @@ const $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
         if (result instanceof Promise) {
           proms.push(result.then((result2) => {
             if (result2.issues.length) {
-              payload.issues.push(...prefixIssues(key, result2.issues));
+              payload2.issues.push(...prefixIssues(key, result2.issues));
             }
-            payload.value[keyResult.value] = result2.value;
+            payload2.value[keyResult.value] = result2.value;
           }));
         } else {
           if (result.issues.length) {
-            payload.issues.push(...prefixIssues(key, result.issues));
+            payload2.issues.push(...prefixIssues(key, result.issues));
           }
-          payload.value[keyResult.value] = result.value;
+          payload2.value[keyResult.value] = result.value;
         }
       }
     }
     if (proms.length) {
-      return Promise.all(proms).then(() => payload);
+      return Promise.all(proms).then(() => payload2);
     }
-    return payload;
+    return payload2;
   };
 });
 const $ZodEnum = /* @__PURE__ */ $constructor("$ZodEnum", (inst, def) => {
@@ -2516,18 +2654,18 @@ const $ZodEnum = /* @__PURE__ */ $constructor("$ZodEnum", (inst, def) => {
   const valuesSet = new Set(values);
   inst._zod.values = valuesSet;
   inst._zod.pattern = new RegExp(`^(${values.filter((k) => propertyKeyTypes.has(typeof k)).map((o) => typeof o === "string" ? escapeRegex(o) : o.toString()).join("|")})$`);
-  inst._zod.parse = (payload, _ctx) => {
-    const input = payload.value;
+  inst._zod.parse = (payload2, _ctx) => {
+    const input = payload2.value;
     if (valuesSet.has(input)) {
-      return payload;
+      return payload2;
     }
-    payload.issues.push({
+    payload2.issues.push({
       code: "invalid_value",
       values,
       input,
       inst
     });
-    return payload;
+    return payload2;
   };
 });
 const $ZodLiteral = /* @__PURE__ */ $constructor("$ZodLiteral", (inst, def) => {
@@ -2538,42 +2676,42 @@ const $ZodLiteral = /* @__PURE__ */ $constructor("$ZodLiteral", (inst, def) => {
   const values = new Set(def.values);
   inst._zod.values = values;
   inst._zod.pattern = new RegExp(`^(${def.values.map((o) => typeof o === "string" ? escapeRegex(o) : o ? escapeRegex(o.toString()) : String(o)).join("|")})$`);
-  inst._zod.parse = (payload, _ctx) => {
-    const input = payload.value;
+  inst._zod.parse = (payload2, _ctx) => {
+    const input = payload2.value;
     if (values.has(input)) {
-      return payload;
+      return payload2;
     }
-    payload.issues.push({
+    payload2.issues.push({
       code: "invalid_value",
       values: def.values,
       input,
       inst
     });
-    return payload;
+    return payload2;
   };
 });
 const $ZodTransform = /* @__PURE__ */ $constructor("$ZodTransform", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.optin = "optional";
-  inst._zod.parse = (payload, ctx) => {
+  inst._zod.parse = (payload2, ctx) => {
     if (ctx.direction === "backward") {
       throw new $ZodEncodeError(inst.constructor.name);
     }
-    const _out = def.transform(payload.value, payload);
+    const _out = def.transform(payload2.value, payload2);
     if (ctx.async) {
       const output = _out instanceof Promise ? _out : Promise.resolve(_out);
       return output.then((output2) => {
-        payload.value = output2;
-        payload.fallback = true;
-        return payload;
+        payload2.value = output2;
+        payload2.fallback = true;
+        return payload2;
       });
     }
     if (_out instanceof Promise) {
       throw new $ZodAsyncError();
     }
-    payload.value = _out;
-    payload.fallback = true;
-    return payload;
+    payload2.value = _out;
+    payload2.fallback = true;
+    return payload2;
   };
 });
 function handleOptionalResult(result, input) {
@@ -2593,26 +2731,26 @@ const $ZodOptional = /* @__PURE__ */ $constructor("$ZodOptional", (inst, def) =>
     const pattern = def.innerType._zod.pattern;
     return pattern ? new RegExp(`^(${cleanRegex(pattern.source)})?$`) : void 0;
   });
-  inst._zod.parse = (payload, ctx) => {
+  inst._zod.parse = (payload2, ctx) => {
     if (def.innerType._zod.optin === "optional") {
-      const input = payload.value;
-      const result = def.innerType._zod.run(payload, ctx);
+      const input = payload2.value;
+      const result = def.innerType._zod.run(payload2, ctx);
       if (result instanceof Promise)
         return result.then((r) => handleOptionalResult(r, input));
       return handleOptionalResult(result, input);
     }
-    if (payload.value === void 0) {
-      return payload;
+    if (payload2.value === void 0) {
+      return payload2;
     }
-    return def.innerType._zod.run(payload, ctx);
+    return def.innerType._zod.run(payload2, ctx);
   };
 });
 const $ZodExactOptional = /* @__PURE__ */ $constructor("$ZodExactOptional", (inst, def) => {
   $ZodOptional.init(inst, def);
   defineLazy(inst._zod, "values", () => def.innerType._zod.values);
   defineLazy(inst._zod, "pattern", () => def.innerType._zod.pattern);
-  inst._zod.parse = (payload, ctx) => {
-    return def.innerType._zod.run(payload, ctx);
+  inst._zod.parse = (payload2, ctx) => {
+    return def.innerType._zod.run(payload2, ctx);
   };
 });
 const $ZodNullable = /* @__PURE__ */ $constructor("$ZodNullable", (inst, def) => {
@@ -2626,49 +2764,49 @@ const $ZodNullable = /* @__PURE__ */ $constructor("$ZodNullable", (inst, def) =>
   defineLazy(inst._zod, "values", () => {
     return def.innerType._zod.values ? /* @__PURE__ */ new Set([...def.innerType._zod.values, null]) : void 0;
   });
-  inst._zod.parse = (payload, ctx) => {
-    if (payload.value === null)
-      return payload;
-    return def.innerType._zod.run(payload, ctx);
+  inst._zod.parse = (payload2, ctx) => {
+    if (payload2.value === null)
+      return payload2;
+    return def.innerType._zod.run(payload2, ctx);
   };
 });
 const $ZodDefault = /* @__PURE__ */ $constructor("$ZodDefault", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.optin = "optional";
   defineLazy(inst._zod, "values", () => def.innerType._zod.values);
-  inst._zod.parse = (payload, ctx) => {
+  inst._zod.parse = (payload2, ctx) => {
     if (ctx.direction === "backward") {
-      return def.innerType._zod.run(payload, ctx);
+      return def.innerType._zod.run(payload2, ctx);
     }
-    if (payload.value === void 0) {
-      payload.value = def.defaultValue;
-      return payload;
+    if (payload2.value === void 0) {
+      payload2.value = def.defaultValue;
+      return payload2;
     }
-    const result = def.innerType._zod.run(payload, ctx);
+    const result = def.innerType._zod.run(payload2, ctx);
     if (result instanceof Promise) {
       return result.then((result2) => handleDefaultResult(result2, def));
     }
     return handleDefaultResult(result, def);
   };
 });
-function handleDefaultResult(payload, def) {
-  if (payload.value === void 0) {
-    payload.value = def.defaultValue;
+function handleDefaultResult(payload2, def) {
+  if (payload2.value === void 0) {
+    payload2.value = def.defaultValue;
   }
-  return payload;
+  return payload2;
 }
 const $ZodPrefault = /* @__PURE__ */ $constructor("$ZodPrefault", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.optin = "optional";
   defineLazy(inst._zod, "values", () => def.innerType._zod.values);
-  inst._zod.parse = (payload, ctx) => {
+  inst._zod.parse = (payload2, ctx) => {
     if (ctx.direction === "backward") {
-      return def.innerType._zod.run(payload, ctx);
+      return def.innerType._zod.run(payload2, ctx);
     }
-    if (payload.value === void 0) {
-      payload.value = def.defaultValue;
+    if (payload2.value === void 0) {
+      payload2.value = def.defaultValue;
     }
-    return def.innerType._zod.run(payload, ctx);
+    return def.innerType._zod.run(payload2, ctx);
   };
 });
 const $ZodNonOptional = /* @__PURE__ */ $constructor("$ZodNonOptional", (inst, def) => {
@@ -2677,65 +2815,65 @@ const $ZodNonOptional = /* @__PURE__ */ $constructor("$ZodNonOptional", (inst, d
     const v = def.innerType._zod.values;
     return v ? new Set([...v].filter((x) => x !== void 0)) : void 0;
   });
-  inst._zod.parse = (payload, ctx) => {
-    const result = def.innerType._zod.run(payload, ctx);
+  inst._zod.parse = (payload2, ctx) => {
+    const result = def.innerType._zod.run(payload2, ctx);
     if (result instanceof Promise) {
       return result.then((result2) => handleNonOptionalResult(result2, inst));
     }
     return handleNonOptionalResult(result, inst);
   };
 });
-function handleNonOptionalResult(payload, inst) {
-  if (!payload.issues.length && payload.value === void 0) {
-    payload.issues.push({
+function handleNonOptionalResult(payload2, inst) {
+  if (!payload2.issues.length && payload2.value === void 0) {
+    payload2.issues.push({
       code: "invalid_type",
       expected: "nonoptional",
-      input: payload.value,
+      input: payload2.value,
       inst
     });
   }
-  return payload;
+  return payload2;
 }
 const $ZodCatch = /* @__PURE__ */ $constructor("$ZodCatch", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.optin = "optional";
   defineLazy(inst._zod, "optout", () => def.innerType._zod.optout);
   defineLazy(inst._zod, "values", () => def.innerType._zod.values);
-  inst._zod.parse = (payload, ctx) => {
+  inst._zod.parse = (payload2, ctx) => {
     if (ctx.direction === "backward") {
-      return def.innerType._zod.run(payload, ctx);
+      return def.innerType._zod.run(payload2, ctx);
     }
-    const result = def.innerType._zod.run(payload, ctx);
+    const result = def.innerType._zod.run(payload2, ctx);
     if (result instanceof Promise) {
       return result.then((result2) => {
-        payload.value = result2.value;
+        payload2.value = result2.value;
         if (result2.issues.length) {
-          payload.value = def.catchValue({
-            ...payload,
+          payload2.value = def.catchValue({
+            ...payload2,
             error: {
               issues: result2.issues.map((iss) => finalizeIssue(iss, ctx, config()))
             },
-            input: payload.value
+            input: payload2.value
           });
-          payload.issues = [];
-          payload.fallback = true;
+          payload2.issues = [];
+          payload2.fallback = true;
         }
-        return payload;
+        return payload2;
       });
     }
-    payload.value = result.value;
+    payload2.value = result.value;
     if (result.issues.length) {
-      payload.value = def.catchValue({
-        ...payload,
+      payload2.value = def.catchValue({
+        ...payload2,
         error: {
           issues: result.issues.map((iss) => finalizeIssue(iss, ctx, config()))
         },
-        input: payload.value
+        input: payload2.value
       });
-      payload.issues = [];
-      payload.fallback = true;
+      payload2.issues = [];
+      payload2.fallback = true;
     }
-    return payload;
+    return payload2;
   };
 });
 const $ZodPipe = /* @__PURE__ */ $constructor("$ZodPipe", (inst, def) => {
@@ -2744,15 +2882,15 @@ const $ZodPipe = /* @__PURE__ */ $constructor("$ZodPipe", (inst, def) => {
   defineLazy(inst._zod, "optin", () => def.in._zod.optin);
   defineLazy(inst._zod, "optout", () => def.out._zod.optout);
   defineLazy(inst._zod, "propValues", () => def.in._zod.propValues);
-  inst._zod.parse = (payload, ctx) => {
+  inst._zod.parse = (payload2, ctx) => {
     if (ctx.direction === "backward") {
-      const right = def.out._zod.run(payload, ctx);
+      const right = def.out._zod.run(payload2, ctx);
       if (right instanceof Promise) {
         return right.then((right2) => handlePipeResult(right2, def.in, ctx));
       }
       return handlePipeResult(right, def.in, ctx);
     }
-    const left = def.in._zod.run(payload, ctx);
+    const left = def.in._zod.run(payload2, ctx);
     if (left instanceof Promise) {
       return left.then((left2) => handlePipeResult(left2, def.out, ctx));
     }
@@ -2772,38 +2910,38 @@ const $ZodReadonly = /* @__PURE__ */ $constructor("$ZodReadonly", (inst, def) =>
   defineLazy(inst._zod, "values", () => def.innerType._zod.values);
   defineLazy(inst._zod, "optin", () => def.innerType?._zod?.optin);
   defineLazy(inst._zod, "optout", () => def.innerType?._zod?.optout);
-  inst._zod.parse = (payload, ctx) => {
+  inst._zod.parse = (payload2, ctx) => {
     if (ctx.direction === "backward") {
-      return def.innerType._zod.run(payload, ctx);
+      return def.innerType._zod.run(payload2, ctx);
     }
-    const result = def.innerType._zod.run(payload, ctx);
+    const result = def.innerType._zod.run(payload2, ctx);
     if (result instanceof Promise) {
       return result.then(handleReadonlyResult);
     }
     return handleReadonlyResult(result);
   };
 });
-function handleReadonlyResult(payload) {
-  payload.value = Object.freeze(payload.value);
-  return payload;
+function handleReadonlyResult(payload2) {
+  payload2.value = Object.freeze(payload2.value);
+  return payload2;
 }
 const $ZodCustom = /* @__PURE__ */ $constructor("$ZodCustom", (inst, def) => {
   $ZodCheck.init(inst, def);
   $ZodType.init(inst, def);
-  inst._zod.parse = (payload, _) => {
-    return payload;
+  inst._zod.parse = (payload2, _) => {
+    return payload2;
   };
-  inst._zod.check = (payload) => {
-    const input = payload.value;
+  inst._zod.check = (payload2) => {
+    const input = payload2.value;
     const r = def.fn(input);
     if (r instanceof Promise) {
-      return r.then((r2) => handleRefineResult(r2, payload, input, inst));
+      return r.then((r2) => handleRefineResult(r2, payload2, input, inst));
     }
-    handleRefineResult(r, payload, input, inst);
+    handleRefineResult(r, payload2, input, inst);
     return;
   };
 });
-function handleRefineResult(result, payload, input, inst) {
+function handleRefineResult(result, payload2, input, inst) {
   if (!result) {
     const _iss = {
       code: "custom",
@@ -2817,7 +2955,7 @@ function handleRefineResult(result, payload, input, inst) {
     };
     if (inst._zod.def.params)
       _iss.params = inst._zod.def.params;
-    payload.issues.push(issue(_iss));
+    payload2.issues.push(issue(_iss));
   }
 }
 var _a;
@@ -3345,22 +3483,22 @@ function _refine(Class, fn, _params) {
 }
 // @__NO_SIDE_EFFECTS__
 function _superRefine(fn, params) {
-  const ch = /* @__PURE__ */ _check((payload) => {
-    payload.addIssue = (issue$1) => {
+  const ch = /* @__PURE__ */ _check((payload2) => {
+    payload2.addIssue = (issue$1) => {
       if (typeof issue$1 === "string") {
-        payload.issues.push(issue(issue$1, payload.value, ch._zod.def));
+        payload2.issues.push(issue(issue$1, payload2.value, ch._zod.def));
       } else {
         const _issue = issue$1;
         if (_issue.fatal)
           _issue.continue = false;
         _issue.code ?? (_issue.code = "custom");
-        _issue.input ?? (_issue.input = payload.value);
+        _issue.input ?? (_issue.input = payload2.value);
         _issue.inst ?? (_issue.inst = ch);
         _issue.continue ?? (_issue.continue = !ch._zod.def.abort);
-        payload.issues.push(issue(_issue));
+        payload2.issues.push(issue(_issue));
       }
     };
-    return fn(payload.value, payload);
+    return fn(payload2.value, payload2);
   }, params);
   return ch;
 }
@@ -4651,6 +4789,18 @@ function union(options, params) {
     ...normalizeParams(params)
   });
 }
+const ZodDiscriminatedUnion = /* @__PURE__ */ $constructor("ZodDiscriminatedUnion", (inst, def) => {
+  ZodUnion.init(inst, def);
+  $ZodDiscriminatedUnion.init(inst, def);
+});
+function discriminatedUnion(discriminator, options, params) {
+  return new ZodDiscriminatedUnion({
+    type: "union",
+    options,
+    discriminator,
+    ...normalizeParams(params)
+  });
+}
 const ZodIntersection = /* @__PURE__ */ $constructor("ZodIntersection", (inst, def) => {
   $ZodIntersection.init(inst, def);
   ZodType.init(inst, def);
@@ -4757,34 +4907,34 @@ const ZodTransform = /* @__PURE__ */ $constructor("ZodTransform", (inst, def) =>
   $ZodTransform.init(inst, def);
   ZodType.init(inst, def);
   inst._zod.processJSONSchema = (ctx, json2, params) => transformProcessor(inst, ctx);
-  inst._zod.parse = (payload, _ctx) => {
+  inst._zod.parse = (payload2, _ctx) => {
     if (_ctx.direction === "backward") {
       throw new $ZodEncodeError(inst.constructor.name);
     }
-    payload.addIssue = (issue$1) => {
+    payload2.addIssue = (issue$1) => {
       if (typeof issue$1 === "string") {
-        payload.issues.push(issue(issue$1, payload.value, def));
+        payload2.issues.push(issue(issue$1, payload2.value, def));
       } else {
         const _issue = issue$1;
         if (_issue.fatal)
           _issue.continue = false;
         _issue.code ?? (_issue.code = "custom");
-        _issue.input ?? (_issue.input = payload.value);
+        _issue.input ?? (_issue.input = payload2.value);
         _issue.inst ?? (_issue.inst = inst);
-        payload.issues.push(issue(_issue));
+        payload2.issues.push(issue(_issue));
       }
     };
-    const output = def.transform(payload.value, payload);
+    const output = def.transform(payload2.value, payload2);
     if (output instanceof Promise) {
       return output.then((output2) => {
-        payload.value = output2;
-        payload.fallback = true;
-        return payload;
+        payload2.value = output2;
+        payload2.fallback = true;
+        return payload2;
       });
     }
-    payload.value = output;
-    payload.fallback = true;
-    return payload;
+    payload2.value = output;
+    payload2.fallback = true;
+    return payload2;
   };
 });
 function transform(fn) {
@@ -5112,6 +5262,7 @@ const packWorldSchema = object$1({
   teaches: array(string().min(1)).optional(),
   unlockHash: string().regex(/^[0-9a-f]{64}$/, { error: "unlockHash must be a lowercase sha256 hex digest" }).optional()
 });
+const GAME_MODES = ["survival", "creative"];
 const packManifestSchema = object$1({
   packId: string().min(1).regex(/^[a-z0-9][a-z0-9-]*$/, { error: "packId must be lowercase letters, digits and dashes" }),
   /** Bumped whenever anything else changes. The launcher compares packId + packVersion. */
@@ -5171,8 +5322,24 @@ const packManifestSchema = object$1({
     datapacks: boolean().optional(),
     python: boolean().optional()
   }).optional(),
+  /**
+   * The game mode of every lesson world in this pack (D-061).
+   *
+   * Set by the pack, not by the child: a methodologist decides that a course
+   * builds in creative. A new copy of a lesson world gets this mode written
+   * into its `level.dat`; a copy that is already on disk is never changed.
+   *
+   * Optional, and absent means survival - every pack published before this
+   * field keeps working. A value this launcher does not know also reads as
+   * survival rather than refusing the pack: a mode added on the Sparks side
+   * must not stop a child from playing, the same rule `teaches` follows.
+   */
+  gameMode: _enum(GAME_MODES).optional().catch(void 0),
   jvmArgs: array(string()).default([])
 });
+function packGameMode(manifest) {
+  return manifest.gameMode ?? "survival";
+}
 class InvalidPackManifestError extends Error {
   problems;
   constructor(problems) {
@@ -5301,6 +5468,73 @@ class InvalidPresetError extends Error {
     this.problems = problems;
   }
 }
+const limits = { "bodyMaxBytes": 2097152, "coverMaxBytes": 5242880, "datapack": { "codeMaxChars": 2e5, "codeMaxLines": null }, "descriptionMaxChars": 240, "python": { "codeMaxChars": 2e5, "codeMaxLines": 1e3 }, "titleMaxChars": 30 };
+const errors = { "GET /api/v1/launcher/feed": { "INVALID": 400, "NOT_STUDENT": 403, "RATE_LIMITED": 429, "SSO_UNAVAILABLE": 503, "UNAUTHORIZED": 401 }, "GET /api/v1/launcher/pack": { "MANIFEST_INVALID": 503, "NOT_CONFIGURED": 503, "NOT_STUDENT": 403, "RATE_LIMITED": 429, "SSO_UNAVAILABLE": 503, "UNAUTHORIZED": 401 }, "GET /api/v1/launcher/pack/asset/{id}": { "ASSET_UNAVAILABLE": 503, "NOT_FOUND": 404, "NOT_STUDENT": 403, "RATE_LIMITED": 429, "SSO_UNAVAILABLE": 503, "UNAUTHORIZED": 401 }, "GET /api/v1/launcher/pack/worlds": { "MANIFEST_INVALID": 503, "NOT_CONFIGURED": 503, "NOT_STUDENT": 403, "RATE_LIMITED": 429, "SSO_UNAVAILABLE": 503, "UNAUTHORIZED": 401 }, "GET /api/v1/launcher/profile": { "NOT_STUDENT": 403, "RATE_LIMITED": 429, "SSO_UNAVAILABLE": 503, "UNAUTHORIZED": 401 }, "GET /api/v1/launcher/projects": { "INVALID": 400, "NOT_STUDENT": 403, "RATE_LIMITED": 429, "SSO_UNAVAILABLE": 503, "UNAUTHORIZED": 401 }, "GET /api/v1/launcher/version": {}, "POST /api/v1/launcher/pack/report": { "INVALID": 400, "NOT_STUDENT": 403, "RATE_LIMITED": 429, "SSO_UNAVAILABLE": 503, "UNAUTHORIZED": 401 }, "POST /api/v1/launcher/pack/worlds": { "INVALID": 400, "MANIFEST_INVALID": 503, "NOT_CONFIGURED": 503, "NOT_STUDENT": 403, "PACK_MISMATCH": 409, "RATE_LIMITED": 429, "SSO_UNAVAILABLE": 503, "UNAUTHORIZED": 401 }, "POST /api/v1/launcher/pairing": { "RATE_LIMITED": 429 }, "POST /api/v1/launcher/pairing/poll": { "RATE_LIMITED": 429 }, "POST /api/v1/launcher/projects": { "INVALID": 400, "NOT_STUDENT": 403, "PUBLISH_FAILED": 500, "RATE_LIMITED": 429, "REJECTED": 400, "SSO_UNAVAILABLE": 503, "TOO_LARGE": 413, "UNAUTHORIZED": 401 }, "POST /api/v1/launcher/session": { "NOT_STUDENT": 403, "RATE_LIMITED": 429, "SSO_UNAVAILABLE": 503, "UNAUTHORIZED": 401 }, "PUT /api/v1/launcher/projects/{id}": { "INVALID": 400, "NOT_FOUND": 404, "NOT_STUDENT": 403, "PUBLISH_FAILED": 500, "RATE_LIMITED": 429, "REJECTED": 400, "SSO_UNAVAILABLE": 503, "TOO_LARGE": 413, "UNAUTHORIZED": 401 }, "PUT /api/v1/launcher/studio/draft": { "FORBIDDEN_SOURCE": 403, "INVALID": 400, "INVALID_DOCUMENT": 400, "NOT_STUDENT": 403, "RATE_LIMITED": 429, "SSO_UNAVAILABLE": 503, "TOO_LARGE": 413, "UNAUTHORIZED": 401, "UNKNOWN_TEMPLATE": 400 } };
+const fieldErrorKeys = { "POST /api/v1/launcher/projects": { "DATAPACK": { "code": ["validation.codeRequired", "validation.codeTooLarge"], "description": ["validation.descriptionTooLong"], "publishId": ["validation.publishId"], "title": ["validation.required", "validation.titleTooLong"], "visibility": ["validation.visibility"] }, "DRAWING": { "description": ["validation.descriptionTooLong"], "publishId": ["validation.publishId"], "title": ["validation.required", "validation.titleTooLong"], "visibility": ["validation.visibility"] }, "MODEL3D": { "description": ["validation.descriptionTooLong"], "modelTemplateId": ["validation.modelTemplateId"], "publishId": ["validation.publishId"], "title": ["validation.required", "validation.titleTooLong"], "visibility": ["validation.visibility"] }, "PYTHON": { "code": ["validation.codeRequired", "validation.codeTooLarge", "validation.codeTooManyLines"], "description": ["validation.descriptionTooLong"], "publishId": ["validation.publishId"], "title": ["validation.required", "validation.titleTooLong"], "visibility": ["validation.visibility"] } }, "PUT /api/v1/launcher/projects/{id}": { "description": ["validation.descriptionTooLong"], "modelTemplateId": ["validation.modelTemplateId"], "title": ["validation.required", "validation.titleTooLong"], "visibility": ["validation.visibility"] } };
+const routes = { "GET /api/v1/launcher/feed": { "auth": "bearer", "cacheControl": "private, no-store", "rateLimit": "browse" }, "GET /api/v1/launcher/pack": { "auth": "bearer", "cacheControl": "private, no-cache", "emptyBody": ["304"], "rateLimit": "default", "requestHeaders": { "If-None-Match": "Optional. The ETag of the last 200. When it still matches, the answer is 304." }, "responseHeaders": { "200": { "ETag": "A quoted string. Send it back as If-None-Match." }, "304": { "ETag": "The same ETag." } } }, "GET /api/v1/launcher/pack/asset/{id}": { "auth": "bearer", "cacheControl": "private, no-store", "emptyBody": ["302"], "pathParams": { "id": "^[0-9]{1,19}$" }, "rateLimit": "default", "responseHeaders": { "302": { "Location": "A signed address on another host, valid for less than an hour. The bytes come from there; check them against sha512 in the manifest." } } }, "GET /api/v1/launcher/pack/worlds": { "auth": "bearer", "cacheControl": "private, no-store", "rateLimit": "default" }, "GET /api/v1/launcher/profile": { "auth": "bearer", "cacheControl": "private, no-store", "rateLimit": "default" }, "GET /api/v1/launcher/projects": { "auth": "bearer", "cacheControl": "private, no-store", "rateLimit": "browse" }, "GET /api/v1/launcher/version": { "auth": "none", "cacheControl": "public, max-age=60, stale-while-revalidate=600 (no-store when latest is absent)", "rateLimit": "none" }, "POST /api/v1/launcher/pack/report": { "auth": "bearer", "cacheControl": "private, no-store", "emptyBody": ["204"], "rateLimit": "default" }, "POST /api/v1/launcher/pack/worlds": { "auth": "bearer", "cacheControl": "private, no-store", "rateLimit": "default" }, "POST /api/v1/launcher/pairing": { "auth": "none", "cacheControl": "private, no-store", "rateLimit": "pairing" }, "POST /api/v1/launcher/pairing/poll": { "auth": "pollSecret", "cacheControl": "private, no-store", "rateLimit": "pairing" }, "POST /api/v1/launcher/projects": { "auth": "bearer", "cacheControl": "private, no-store", "rateLimit": "default" }, "POST /api/v1/launcher/session": { "auth": "bearer", "cacheControl": "private, no-store", "rateLimit": "default" }, "PUT /api/v1/launcher/projects/{id}": { "auth": "bearer", "cacheControl": "private, no-store", "pathParams": { "id": "^[A-Za-z0-9_-]{1,64}$" }, "rateLimit": "default" }, "PUT /api/v1/launcher/studio/draft": { "auth": "bearer", "cacheControl": "private, no-store", "rateLimit": "default" } };
+const contract = {
+  limits,
+  errors,
+  fieldErrorKeys,
+  routes
+};
+const ROUTES = {
+  feed: "GET /api/v1/launcher/feed",
+  ownProjects: "GET /api/v1/launcher/projects",
+  publish: "POST /api/v1/launcher/projects",
+  updateSkin: "PUT /api/v1/launcher/projects/{id}",
+  pack: "GET /api/v1/launcher/pack",
+  packAsset: "GET /api/v1/launcher/pack/asset/{id}",
+  packReport: "POST /api/v1/launcher/pack/report",
+  packWorlds: "POST /api/v1/launcher/pack/worlds",
+  pairing: "POST /api/v1/launcher/pairing",
+  pairingPoll: "POST /api/v1/launcher/pairing/poll",
+  profile: "GET /api/v1/launcher/profile",
+  session: "POST /api/v1/launcher/session",
+  version: "GET /api/v1/launcher/version"
+};
+const PUBLISH_ROUTE = ROUTES.publish;
+function routeMethod(route) {
+  return route.slice(0, route.indexOf(" "));
+}
+function routeUrl(sparksUrl, route, params = {}) {
+  const path = route.slice(route.indexOf(" ") + 1).replace(/\{(\w+)\}/g, (_whole, name) => encodeURIComponent(params[name] ?? ""));
+  return `${sparksUrl.replace(/\/+$/, "")}${path}`;
+}
+function errorsOf(route) {
+  return contract.errors[route];
+}
+function statusesWithoutBody(route) {
+  const facts = contract.routes[route];
+  return (facts.emptyBody ?? []).map(Number);
+}
+const typeLimits = {
+  PYTHON: contract.limits.python,
+  DATAPACK: contract.limits.datapack
+};
+const PUBLISH_LIMITS = {
+  titleMaxChars: contract.limits.titleMaxChars,
+  descriptionMaxChars: contract.limits.descriptionMaxChars,
+  /** The whole JSON body in UTF-8 bytes, base64 cover or picture included. Over it: 413. */
+  bodyMaxBytes: contract.limits.bodyMaxBytes,
+  /** A cover or a picture after base64 decoding. The body cap is the one met first. */
+  imageMaxBytes: contract.limits.coverMaxBytes,
+  /**
+   * The code caps for one type. `codeMaxChars` is compared with
+   * `value.length` on Sparks, so it counts UTF-16 characters. `codeMaxLines`
+   * is null when the type has no line cap (a data pack).
+   */
+  code(type) {
+    return typeLimits[type];
+  }
+};
+const PUBLISH_ERRORS = contract.errors[PUBLISH_ROUTE];
+const SKIN_UPDATE_ERRORS = contract.errors[ROUTES.updateSkin];
+const CODE_TOO_LONG_KEYS = new Set(
+  Object.values(contract.fieldErrorKeys[PUBLISH_ROUTE]).flatMap((fields) => "code" in fields ? fields.code : []).filter((key) => /\.codeToo[A-Z]/.test(key))
+);
+const PACK_ERRORS = errorsOf(ROUTES.pack);
+const UNCHANGED = statusesWithoutBody(ROUTES.pack);
 const CODE_KEYS = ["code", "error", "detail"];
 const REASON_KEYS = ["detail", "message", "reason"];
 async function manifestVerdict(response) {
@@ -5326,18 +5560,19 @@ async function fetchCurrentPack(options) {
   if (options.etag) headers["If-None-Match"] = options.etag;
   let response;
   try {
-    response = await doFetch(`${base}/api/v1/launcher/pack`, {
+    response = await doFetch(routeUrl(base, ROUTES.pack), {
+      method: routeMethod(ROUTES.pack),
       headers,
       signal: AbortSignal.timeout(options.timeoutMs ?? 1e4)
     });
   } catch {
     return { ok: false, failure: "unavailable" };
   }
-  if (response.status === 304) return { ok: true, unchanged: true };
+  if (UNCHANGED.includes(response.status)) return { ok: true, unchanged: true };
   const status = response.status;
-  if (status === 401) return { ok: false, failure: "expired", status };
-  if (status === 403) return { ok: false, failure: "not_student", status };
-  if (status === 429) return { ok: false, failure: "rate_limited", status };
+  if (status === PACK_ERRORS.UNAUTHORIZED) return { ok: false, failure: "expired", status };
+  if (status === PACK_ERRORS.NOT_STUDENT) return { ok: false, failure: "not_student", status };
+  if (status === PACK_ERRORS.RATE_LIMITED) return { ok: false, failure: "rate_limited", status };
   if (!response.ok) {
     const verdict = await manifestVerdict(response);
     if (!verdict.invalid) return { ok: false, failure: "unavailable", status };
@@ -5369,8 +5604,8 @@ async function reportInstall(options) {
   const base = options.sparksUrl.replace(/\/+$/, "");
   const doFetch = options.fetchImpl ?? fetch;
   try {
-    const response = await doFetch(`${base}/api/v1/launcher/pack/report`, {
-      method: "POST",
+    const response = await doFetch(routeUrl(base, ROUTES.packReport), {
+      method: routeMethod(ROUTES.packReport),
       headers: {
         Authorization: `Bearer ${options.bearer}`,
         "Content-Type": "application/json"
@@ -5383,13 +5618,14 @@ async function reportInstall(options) {
     return false;
   }
 }
+const ERRORS$3 = errorsOf(ROUTES.packWorlds);
 async function syncUnlockedWorlds(options) {
   const base = options.sparksUrl.replace(/\/+$/, "");
   const doFetch = options.fetchImpl ?? fetch;
   let response;
   try {
-    response = await doFetch(`${base}/api/v1/launcher/pack/worlds`, {
-      method: "POST",
+    response = await doFetch(routeUrl(base, ROUTES.packWorlds), {
+      method: routeMethod(ROUTES.packWorlds),
       headers: {
         Authorization: `Bearer ${options.bearer}`,
         "Content-Type": "application/json"
@@ -5401,10 +5637,10 @@ async function syncUnlockedWorlds(options) {
     return { ok: false, failure: "unavailable" };
   }
   const status = response.status;
-  if (status === 401) return { ok: false, failure: "expired", status };
-  if (status === 403) return { ok: false, failure: "not_student", status };
-  if (status === 429) return { ok: false, failure: "rate_limited", status };
-  if (status === 409) return { ok: false, failure: "mismatch", status };
+  if (status === ERRORS$3.UNAUTHORIZED) return { ok: false, failure: "expired", status };
+  if (status === ERRORS$3.NOT_STUDENT) return { ok: false, failure: "not_student", status };
+  if (status === ERRORS$3.RATE_LIMITED) return { ok: false, failure: "rate_limited", status };
+  if (status === ERRORS$3.PACK_MISMATCH) return { ok: false, failure: "mismatch", status };
   if (!response.ok) return { ok: false, failure: "unavailable", status };
   let body;
   try {
@@ -5891,10 +6127,21 @@ function previewOf$1(doc2) {
       return { kind: "quest", icon: first.quest.icon };
   }
 }
+const tails = /* @__PURE__ */ new Map();
+function serialised(key, change) {
+  const before = tails.get(key) ?? Promise.resolve();
+  const run2 = before.then(change);
+  const tail = run2.catch(() => void 0);
+  tails.set(key, tail);
+  void tail.then(() => {
+    if (tails.get(key) === tail) tails.delete(key);
+  });
+  return run2;
+}
 function datapackStoreDir(dataDir) {
   return node_path.join(dataDir, "datapacks");
 }
-const INDEX_FILE$2 = "index.json";
+const INDEX_FILE$3 = "index.json";
 const DOC_FILE = "draft.json";
 const SLUG = /^[a-z0-9][a-z0-9_]{0,39}$/;
 function isDraftSlug(slug) {
@@ -5905,30 +6152,41 @@ function isWorldFolder(world) {
   return WORLD_FOLDER.test(world);
 }
 function indexPath$1(dataDir) {
-  return node_path.join(datapackStoreDir(dataDir), INDEX_FILE$2);
+  return node_path.join(datapackStoreDir(dataDir), INDEX_FILE$3);
 }
-async function readIndex$2(dataDir) {
+async function readIndex$3(dataDir) {
+  let raw;
   try {
-    const parsed = JSON.parse(await promises.readFile(indexPath$1(dataDir), "utf8"));
-    if (typeof parsed !== "object" || parsed === null) return {};
-    return parsed;
-  } catch {
-    return {};
+    raw = await promises.readFile(indexPath$1(dataDir), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    throw error;
   }
+  const parsed = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${INDEX_FILE$3} is not a draft index`);
+  }
+  return parsed;
 }
-async function writeIndex$2(dataDir, index) {
+async function writeIndex$3(dataDir, index) {
   const path = indexPath$1(dataDir);
   await promises.mkdir(datapackStoreDir(dataDir), { recursive: true });
-  const partial2 = `${path}.part`;
-  await promises.writeFile(partial2, `${JSON.stringify(index, null, 2)}
+  await writeFileAtomic(path, `${JSON.stringify(index, null, 2)}
 `);
-  await promises.rename(partial2, path);
+}
+function changeIndex$2(dataDir, change) {
+  return serialised(indexPath$1(dataDir), async () => {
+    const index = await readIndex$3(dataDir);
+    const { result, write } = await change(index);
+    if (write) await writeIndex$3(dataDir, index);
+    return result;
+  });
 }
 function docPath(dataDir, slug) {
   return node_path.join(datapackStoreDir(dataDir), slug, DOC_FILE);
 }
 async function listDrafts(dataDir) {
-  const index = await readIndex$2(dataDir);
+  const index = await readIndex$3(dataDir).catch(() => ({}));
   const names = await promises.readdir(datapackStoreDir(dataDir)).catch(() => []);
   const entries = await Promise.all(
     names.filter(isDraftSlug).map(async (slug) => {
@@ -5943,7 +6201,8 @@ async function listDrafts(dataDir) {
         // A draft whose index entry was lost defaults to "not in the game".
         // The other way round would put a pack a child cannot see back into
         // their world on the next launch.
-        wanted: known?.wanted === true
+        wanted: known?.wanted === true,
+        ...typeof known?.publishedUrl === "string" ? { publishedUrl: known.publishedUrl } : {}
       };
     })
   );
@@ -5954,24 +6213,24 @@ async function readDraft(dataDir, slug) {
   return promises.readFile(docPath(dataDir, slug), "utf8").catch(() => void 0);
 }
 async function createDraft(dataDir, name, doc2, now = /* @__PURE__ */ new Date()) {
-  const index = await readIndex$2(dataDir);
-  const existing = await listDrafts(dataDir);
-  const taken = /* @__PURE__ */ new Set([
-    ...existing.map((entry) => entry.slug),
-    ...Object.keys(index),
-    // Not folders, but they cannot become namespaces either.
-    "minecraft",
-    "realms",
-    "c",
-    "fabric"
-  ]);
-  const slug = uniqueId(taken, slugify(name, "pack"));
-  assertNamespace(namespaceFor(slug));
-  const at = now.toISOString();
-  await writeDoc(dataDir, slug, doc2);
-  index[slug] = { name, createdAt: at, updatedAt: at, wanted: false };
-  await writeIndex$2(dataDir, index);
-  return { slug, name, createdAt: at, updatedAt: at, wanted: false };
+  return changeIndex$2(dataDir, async (index) => {
+    const existing = await listDrafts(dataDir);
+    const taken = /* @__PURE__ */ new Set([
+      ...existing.map((entry) => entry.slug),
+      ...Object.keys(index),
+      // Not folders, but they cannot become namespaces either.
+      "minecraft",
+      "realms",
+      "c",
+      "fabric"
+    ]);
+    const slug = uniqueId(taken, slugify(name, "pack"));
+    assertNamespace(namespaceFor(slug));
+    const at = now.toISOString();
+    await writeDoc(dataDir, slug, doc2);
+    index[slug] = { name, createdAt: at, updatedAt: at, wanted: false };
+    return { result: { slug, name, createdAt: at, updatedAt: at, wanted: false }, write: true };
+  });
 }
 function namespaceFor(slug) {
   return slug;
@@ -5979,38 +6238,39 @@ function namespaceFor(slug) {
 async function writeDoc(dataDir, slug, doc2) {
   const path = docPath(dataDir, slug);
   await promises.mkdir(node_path.dirname(path), { recursive: true });
-  const partial2 = `${path}.part`;
-  await promises.writeFile(partial2, serializeDatapackDoc(doc2));
-  await promises.rename(partial2, path);
+  await writeFileAtomic(path, serializeDatapackDoc(doc2));
 }
 async function saveDraft(dataDir, slug, doc2, now = /* @__PURE__ */ new Date()) {
   if (!isDraftSlug(slug)) return false;
-  const index = await readIndex$2(dataDir);
-  const known = index[slug];
-  if (!known) return false;
+  const exists2 = await promises.stat(docPath(dataDir, slug)).catch(() => void 0);
+  if (!exists2) return false;
   await writeDoc(dataDir, slug, doc2);
-  index[slug] = { ...known, name: doc2.name, updatedAt: now.toISOString() };
-  await writeIndex$2(dataDir, index);
+  await changeIndex$2(dataDir, async (index) => {
+    const known = index[slug];
+    if (!known) return { result: void 0, write: false };
+    index[slug] = { ...known, name: doc2.name, updatedAt: now.toISOString() };
+    return { result: void 0, write: true };
+  }).catch(() => void 0);
   return true;
 }
 async function renameDraft(dataDir, slug, name, now = /* @__PURE__ */ new Date()) {
   if (!isDraftSlug(slug)) return false;
   if (name.trim() === "") return false;
-  const index = await readIndex$2(dataDir);
-  const known = index[slug];
-  if (!known) return false;
-  index[slug] = { ...known, name, updatedAt: now.toISOString() };
-  await writeIndex$2(dataDir, index);
-  return true;
+  return changeIndex$2(dataDir, async (index) => {
+    const known = index[slug];
+    if (!known) return { result: false, write: false };
+    index[slug] = { ...known, name, updatedAt: now.toISOString() };
+    return { result: true, write: true };
+  });
 }
 async function removeDraft(dataDir, slug, packId) {
   if (!isDraftSlug(slug)) return false;
-  const index = await readIndex$2(dataDir);
   if (packId) await removeFromEveryWorld(dataDir, packId, slug);
   await promises.rm(node_path.join(datapackStoreDir(dataDir), slug), { recursive: true, force: true });
-  delete index[slug];
-  await writeIndex$2(dataDir, index);
-  return true;
+  return changeIndex$2(dataDir, async (index) => {
+    delete index[slug];
+    return { result: true, write: true };
+  });
 }
 async function removeFromEveryWorld(dataDir, packId, slug) {
   if (!isDraftSlug(slug)) return [];
@@ -6036,33 +6296,31 @@ async function applyDraftToWorld(dataDir, packId, world, slug, doc2, format) {
   for (const [relative, body] of files) {
     const path = node_path.join(root, relative);
     await promises.mkdir(node_path.dirname(path), { recursive: true });
-    const partial2 = `${path}.part`;
-    await promises.writeFile(partial2, body);
-    await promises.rename(partial2, path);
+    await writeFileAtomic(path, body);
   }
-  const swept = await sweep(root, new Set(files.keys()));
+  const swept = await sweep$1(root, new Set(files.keys()));
   return { written: files.size, swept };
 }
-async function sweep(root, expected) {
+async function sweep$1(root, expected) {
   const swept = [];
   const walk = async (relative) => {
     const absolute = relative === "" ? root : node_path.join(root, relative);
     const entries = await promises.readdir(absolute, { withFileTypes: true }).catch(() => []);
     let kept = 0;
     for (const entry of entries) {
-      const child = relative === "" ? entry.name : `${relative}/${entry.name}`;
+      const child2 = relative === "" ? entry.name : `${relative}/${entry.name}`;
       if (entry.isDirectory()) {
-        const stillHasSomething = await walk(child);
+        const stillHasSomething = await walk(child2);
         if (stillHasSomething) kept += 1;
-        else await promises.rm(node_path.join(root, child), { recursive: true, force: true });
+        else await promises.rm(node_path.join(root, child2), { recursive: true, force: true });
         continue;
       }
-      if (expected.has(child)) {
+      if (expected.has(child2)) {
         kept += 1;
         continue;
       }
-      await promises.unlink(node_path.join(root, child));
-      swept.push(child);
+      await promises.unlink(node_path.join(root, child2));
+      swept.push(child2);
     }
     return kept > 0;
   };
@@ -6071,12 +6329,21 @@ async function sweep(root, expected) {
 }
 async function setDraftWanted(dataDir, slug, wanted) {
   if (!isDraftSlug(slug)) return false;
-  const index = await readIndex$2(dataDir);
-  const known = index[slug];
-  if (!known) return false;
-  index[slug] = { ...known, wanted };
-  await writeIndex$2(dataDir, index);
-  return true;
+  return changeIndex$2(dataDir, async (index) => {
+    const known = index[slug];
+    if (!known) return { result: false, write: false };
+    index[slug] = { ...known, wanted };
+    return { result: true, write: true };
+  });
+}
+async function setDraftPublished(dataDir, slug, url) {
+  if (!isDraftSlug(slug)) return false;
+  return changeIndex$2(dataDir, async (index) => {
+    const known = index[slug];
+    if (!known) return { result: false, write: false };
+    index[slug] = { ...known, publishedUrl: url };
+    return { result: true, write: true };
+  });
 }
 async function syncWorld(dataDir, packId, world, format) {
   const result = { applied: [], removed: [], failed: [] };
@@ -6116,33 +6383,41 @@ async function removeFromWorld(dataDir, packId, world, slug) {
 function scriptStoreDir(dataDir) {
   return node_path.join(dataDir, "scripts");
 }
-const INDEX_FILE$1 = "index.json";
+const INDEX_FILE$2 = "index.json";
 const DRAFT_FILE = "draft.py";
 const LEDGER_FILE = ".kodland-scripts.json";
 function indexPath(dataDir) {
-  return node_path.join(scriptStoreDir(dataDir), INDEX_FILE$1);
+  return node_path.join(scriptStoreDir(dataDir), INDEX_FILE$2);
 }
 function draftPath(dataDir, slug) {
   return node_path.join(scriptStoreDir(dataDir), slug, DRAFT_FILE);
 }
-async function writeAtomic(path, text) {
-  const partial2 = `${path}.part`;
-  await promises.writeFile(partial2, text);
-  await promises.rename(partial2, path);
-}
-async function readIndex$1(dataDir) {
+async function readIndex$2(dataDir) {
+  let raw;
   try {
-    const raw = await promises.readFile(indexPath(dataDir), "utf8");
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
+    raw = await promises.readFile(indexPath(dataDir), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    throw error;
   }
+  const parsed = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${INDEX_FILE$2} is not a script index`);
+  }
+  return parsed;
 }
-async function writeIndex$1(dataDir, index) {
+async function writeIndex$2(dataDir, index) {
   await promises.mkdir(scriptStoreDir(dataDir), { recursive: true });
-  await writeAtomic(indexPath(dataDir), `${JSON.stringify(index, null, 2)}
+  await writeFileAtomic(indexPath(dataDir), `${JSON.stringify(index, null, 2)}
 `);
+}
+function changeIndex$1(dataDir, change) {
+  return serialised(indexPath(dataDir), async () => {
+    const index = await readIndex$2(dataDir);
+    const { result, write } = await change(index);
+    if (write) await writeIndex$2(dataDir, index);
+    return result;
+  });
 }
 function digest(text) {
   return node_crypto.createHash("sha256").update(text, "utf8").digest("hex");
@@ -6169,11 +6444,11 @@ async function readLedger(dataDir, packId) {
 async function writeLedger(dataDir, packId, ledger) {
   const dir = instanceLayout(dataDir, packId).minescript;
   await promises.mkdir(dir, { recursive: true });
-  await writeAtomic(ledgerPath(dataDir, packId), `${JSON.stringify(ledger, null, 2)}
+  await writeFileAtomic(ledgerPath(dataDir, packId), `${JSON.stringify(ledger, null, 2)}
 `);
 }
 async function listScripts(dataDir) {
-  const index = await readIndex$1(dataDir);
+  const index = await readIndex$2(dataDir).catch(() => ({}));
   const names = await promises.readdir(scriptStoreDir(dataDir)).catch(() => []);
   const entries = await Promise.all(
     names.filter(isScriptSlug).map(async (slug) => {
@@ -6188,7 +6463,8 @@ async function listScripts(dataDir) {
         // A lost index entry defaults to "not in the game", the same direction
         // `listDrafts` chose: the other way round puts a script a child cannot
         // see back into their instance on the next save.
-        wanted: known?.wanted === true
+        wanted: known?.wanted === true,
+        ...typeof known?.publishedUrl === "string" ? { publishedUrl: known.publishedUrl } : {}
       };
     })
   );
@@ -6210,61 +6486,71 @@ async function createScript(dataDir, slug, name, text, now = /* @__PURE__ */ new
   if (!isScriptSlug(slug)) return void 0;
   if (!await scriptSlugIsFree(dataDir, slug)) return void 0;
   await promises.mkdir(node_path.join(scriptStoreDir(dataDir), slug), { recursive: true });
-  await writeAtomic(draftPath(dataDir, slug), text);
+  await writeFileAtomic(draftPath(dataDir, slug), text);
   const stamp = now.toISOString();
-  const index = await readIndex$1(dataDir);
   const row = { name, createdAt: stamp, updatedAt: stamp, wanted: true };
-  index[slug] = row;
-  await writeIndex$1(dataDir, index);
-  return { slug, ...row };
+  return changeIndex$1(dataDir, async (index) => {
+    index[slug] = row;
+    return { result: { slug, ...row }, write: true };
+  });
 }
 async function saveScript(dataDir, slug, text, now = /* @__PURE__ */ new Date()) {
   if (!isScriptSlug(slug)) return false;
   const exists2 = await promises.stat(draftPath(dataDir, slug)).catch(() => void 0);
   if (!exists2) return false;
-  await writeAtomic(draftPath(dataDir, slug), text);
-  const index = await readIndex$1(dataDir);
-  const known = index[slug];
-  if (known) {
+  await writeFileAtomic(draftPath(dataDir, slug), text);
+  await changeIndex$1(dataDir, async (index) => {
+    const known = index[slug];
+    if (!known) return { result: void 0, write: false };
     index[slug] = { ...known, updatedAt: now.toISOString() };
-    await writeIndex$1(dataDir, index);
-  }
+    return { result: void 0, write: true };
+  }).catch(() => void 0);
   return true;
 }
 async function renameScript(dataDir, slug, next, now = /* @__PURE__ */ new Date()) {
   if (!isScriptSlug(slug) || !isScriptSlug(next)) return { ok: false, reason: "invalid" };
   if (next === slug) return { ok: true, slug };
   if (RESERVED_SCRIPT_SLUGS.includes(next)) return { ok: false, reason: "reserved" };
-  const index = await readIndex$1(dataDir);
-  const known = index[slug];
-  const here = await promises.stat(node_path.join(scriptStoreDir(dataDir), slug)).catch(() => void 0);
-  if (!here) return { ok: false, reason: "missing" };
-  if (!await scriptSlugIsFree(dataDir, next)) return { ok: false, reason: "taken" };
-  await promises.rename(node_path.join(scriptStoreDir(dataDir), slug), node_path.join(scriptStoreDir(dataDir), next));
-  const row = known ?? { name: next, createdAt: now.toISOString(), wanted: true, updatedAt: now.toISOString() };
-  delete index[slug];
-  index[next] = { ...row, name: next, updatedAt: now.toISOString() };
-  await writeIndex$1(dataDir, index);
-  return { ok: true, slug: next };
+  return changeIndex$1(dataDir, async (index) => {
+    const known = index[slug];
+    const here = await promises.stat(node_path.join(scriptStoreDir(dataDir), slug)).catch(() => void 0);
+    if (!here) return { result: { ok: false, reason: "missing" }, write: false };
+    if (!await scriptSlugIsFree(dataDir, next)) {
+      return { result: { ok: false, reason: "taken" }, write: false };
+    }
+    await promises.rename(node_path.join(scriptStoreDir(dataDir), slug), node_path.join(scriptStoreDir(dataDir), next));
+    const row = known ?? { name: next, createdAt: now.toISOString(), wanted: true, updatedAt: now.toISOString() };
+    delete index[slug];
+    index[next] = { ...row, name: next, updatedAt: now.toISOString() };
+    return { result: { ok: true, slug: next }, write: true };
+  });
 }
 async function setScriptWanted(dataDir, slug, wanted, now = /* @__PURE__ */ new Date()) {
   if (!isScriptSlug(slug)) return false;
-  const index = await readIndex$1(dataDir);
-  const known = index[slug];
-  if (!known) return false;
-  index[slug] = { ...known, wanted, updatedAt: now.toISOString() };
-  await writeIndex$1(dataDir, index);
-  return true;
+  return changeIndex$1(dataDir, async (index) => {
+    const known = index[slug];
+    if (!known) return { result: false, write: false };
+    index[slug] = { ...known, wanted, updatedAt: now.toISOString() };
+    return { result: true, write: true };
+  });
+}
+async function setScriptPublished(dataDir, slug, url) {
+  if (!isScriptSlug(slug)) return false;
+  return changeIndex$1(dataDir, async (index) => {
+    const known = index[slug];
+    if (!known) return { result: false, write: false };
+    index[slug] = { ...known, publishedUrl: url };
+    return { result: true, write: true };
+  });
 }
 async function removeScript(dataDir, slug) {
   if (!isScriptSlug(slug)) return false;
   await promises.rm(node_path.join(scriptStoreDir(dataDir), slug), { recursive: true, force: true });
-  const index = await readIndex$1(dataDir);
-  if (slug in index) {
+  return changeIndex$1(dataDir, async (index) => {
+    if (!(slug in index)) return { result: true, write: false };
     delete index[slug];
-    await writeIndex$1(dataDir, index);
-  }
-  return true;
+    return { result: true, write: true };
+  });
 }
 async function hashOnDisk(path) {
   const text = await promises.readFile(path, "utf8").catch(() => void 0);
@@ -6285,7 +6571,7 @@ async function syncScripts(dataDir, packId) {
   const written = [];
   const nextFiles = {};
   for (const [file, text] of wanted) {
-    await writeAtomic(node_path.join(dir, file), text);
+    await writeFileAtomic(node_path.join(dir, file), text);
     nextFiles[file] = digest(text);
     written.push(file);
   }
@@ -6311,7 +6597,7 @@ async function applyScript(dataDir, packId, slug, text) {
   const dir = instanceLayout(dataDir, packId).minescript;
   const file = scriptFileName(slug);
   await promises.mkdir(dir, { recursive: true });
-  await writeAtomic(node_path.join(dir, file), text);
+  await writeFileAtomic(node_path.join(dir, file), text);
   const ledger = await readLedger(dataDir, packId);
   ledger.files[file] = digest(text);
   await writeLedger(dataDir, packId, ledger);
@@ -16133,10 +16419,8 @@ async function readItemCatalogue(dataDir, instanceDir, minecraftVersion2) {
   }
   const catalogue = await readItemCatalogueFromJar(instanceDir, minecraftVersion2);
   await promises.mkdir(node_path.join(dataDir, "cache"), { recursive: true });
-  const partial2 = `${path}.part`;
-  await promises.writeFile(partial2, `${JSON.stringify(catalogue)}
+  await writeFileAtomic(path, `${JSON.stringify(catalogue)}
 `);
-  await promises.rename(partial2, path);
   return catalogue;
 }
 function itemTextureName(id) {
@@ -16167,9 +16451,7 @@ async function extractItemTextures(instanceDir, minecraftVersion2, targetDir) {
       if (!entry) continue;
       const bytes = await entry.async("uint8array");
       const path = node_path.join(targetDir, `${name}.png`);
-      const partial2 = `${path}.part`;
-      await promises.writeFile(partial2, bytes);
-      await promises.rename(partial2, path);
+      await writeFileAtomic(path, bytes);
       written.add(name);
     }
   }
@@ -16213,16 +16495,8 @@ async function readPackCache(dataDir) {
 async function writePackCache(dataDir, cached2) {
   await promises.mkdir(dataDir, { recursive: true });
   const path = packCachePath(dataDir);
-  const temporary = `${path}.${process$2.pid}-${Date.now().toString(36)}.part`;
-  await promises.writeFile(temporary, `${JSON.stringify(cached2, null, 2)}
+  await writeFileAtomic(path, `${JSON.stringify(cached2, null, 2)}
 `);
-  try {
-    await promises.rename(temporary, path);
-  } catch (error) {
-    await promises.unlink(temporary).catch(() => {
-    });
-    throw error;
-  }
 }
 const DISABLED_DIR = "mods-off";
 const STATE_FILE = "mods.json";
@@ -16244,7 +16518,7 @@ async function readModState(dataDir, packId) {
 async function writeModState(dataDir, packId, state) {
   const layout = instanceLayout(dataDir, packId);
   await promises.mkdir(layout.instance, { recursive: true });
-  await promises.writeFile(statePath$1(dataDir, packId), `${JSON.stringify(state, null, 2)}
+  await writeFileAtomic(statePath$1(dataDir, packId), `${JSON.stringify(state, null, 2)}
 `);
 }
 function isRequired(mod) {
@@ -16431,13 +16705,23 @@ async function syncWorldLibrary(dataDir, packId, open, onStep, fetchImpl = fetch
   actual   ${actual}`
       );
     }
-    const temporary = node_path.join(root, `.tmp-${world.id}-${process.pid}-${Date.now().toString(36)}`);
+    const temporary = node_path.join(root, `.tmp-${world.id}-${process.pid}-${node_crypto.randomBytes(4).toString("hex")}`);
     await promises.rm(temporary, { recursive: true, force: true });
     try {
       await extractWorldZip(bytes, temporary);
       await promises.rename(temporary, target);
     } catch (error) {
       await promises.rm(temporary, { recursive: true, force: true });
+      if (error instanceof WorldZipRefusedError) {
+        results.push({
+          worldId: world.id,
+          revision: world.revision,
+          folder,
+          outcome: "refused",
+          reason: error.message
+        });
+        continue;
+      }
       throw error;
     }
     await removeOtherRevisions(root, world, open, folder);
@@ -16462,9 +16746,7 @@ async function fetchArt(dataDir, packId, world, fetchImpl, onStep) {
     const actual = sha512OfBytes(bytes);
     if (actual !== world.art.sha512) throw new Error("art does not match its hash");
     await promises.mkdir(node_path.join(target, ".."), { recursive: true });
-    const temporary = `${target}.${process.pid}-${Date.now().toString(36)}.part`;
-    await promises.writeFile(temporary, bytes);
-    await promises.rename(temporary, target);
+    await writeFileAtomic(target, bytes);
   } catch (error) {
   }
 }
@@ -16482,13 +16764,28 @@ async function removeOtherRevisions(root, world, worlds, keep) {
     await promises.rm(node_path.join(root, entry.name), { recursive: true, force: true });
   }
 }
+class WorldZipRefusedError extends Error {
+  name = "WorldZipRefusedError";
+}
+function isJunkEntry(name) {
+  const parts = name.split("/");
+  if (parts.includes("__MACOSX")) return true;
+  const last = parts[parts.length - 1] ?? "";
+  return last.startsWith("._") || last === ".DS_Store" || last.toLowerCase() === "thumbs.db";
+}
 async function extractWorldZip(bytes, target) {
   const zip = await JSZip.loadAsync(bytes);
-  const entries = Object.values(zip.files).filter((file) => !file.dir);
+  const entries = Object.values(zip.files).filter((file) => !file.dir && !isJunkEntry(file.name));
   const prefix = commonWorldPrefix(entries.map((file) => file.name));
+  const relativeOf = (name) => prefix ? name.slice(prefix.length) : name;
+  if (!entries.some((file) => relativeOf(file.name) === "level.dat")) {
+    throw new WorldZipRefusedError(
+      "the world zip has no level.dat at its root or inside one folder"
+    );
+  }
   await promises.mkdir(target, { recursive: true });
   for (const file of entries) {
-    const relative = prefix ? file.name.slice(prefix.length) : file.name;
+    const relative = relativeOf(file.name);
     if (!relative) continue;
     if (!isSafeRelativePath(relative)) {
       throw new Error(`World zip contains an unsafe path: ${file.name}`);
@@ -16541,7 +16838,7 @@ async function adoptPackVersion(dataDir, manifest) {
     packVersion: manifest.packVersion,
     shape: installShape(manifest)
   };
-  await promises.writeFile(layout.stateFile, `${JSON.stringify(next, null, 2)}
+  await writeFileAtomic(layout.stateFile, `${JSON.stringify(next, null, 2)}
 `);
   return true;
 }
@@ -16600,7 +16897,7 @@ async function writePackState(dataDir, manifest, now, verified) {
     shape: installShape(manifest),
     ...verified ? { verified } : {}
   };
-  await promises.writeFile(layout.stateFile, `${JSON.stringify(state, null, 2)}
+  await writeFileAtomic(layout.stateFile, `${JSON.stringify(state, null, 2)}
 `);
 }
 async function clearVerifiedStamp(dataDir, packId) {
@@ -16612,7 +16909,7 @@ async function clearVerifiedStamp(dataDir, packId) {
     packVersion: state.packVersion,
     installedAt: state.installedAt
   };
-  await promises.writeFile(layout.stateFile, `${JSON.stringify(rest, null, 2)}
+  await writeFileAtomic(layout.stateFile, `${JSON.stringify(rest, null, 2)}
 `);
   return true;
 }
@@ -16679,7 +16976,7 @@ async function ensureSkinLoaderConfig(instanceDir) {
   const layout = skinLayout(instanceDir);
   await promises.mkdir(layout.root, { recursive: true });
   await promises.mkdir(layout.skins, { recursive: true });
-  await promises.writeFile(layout.config, `${JSON.stringify(SKIN_LOADER_CONFIG, null, 2)}
+  await writeFileAtomic(layout.config, `${JSON.stringify(SKIN_LOADER_CONFIG, null, 2)}
 `);
 }
 function pngSize(bytes) {
@@ -16798,9 +17095,7 @@ async function applySkin(instanceDir, username, png) {
   if (opaque === 0) return { ok: false, reason: "empty" };
   await ensureSkinLoaderConfig(instanceDir);
   const destination = skinFileFor(instanceDir, username);
-  const partial2 = `${destination}.part`;
-  await promises.writeFile(partial2, png);
-  await promises.rename(partial2, destination);
+  await writeFileAtomic(destination, png);
   return { ok: true, path: destination, width: size.width, height: size.height };
 }
 async function removeAppliedSkin(instanceDir, username) {
@@ -16822,6 +17117,10 @@ async function readAppliedSkin(instanceDir, username) {
 function hasMinescript(mods) {
   return mods.some((mod) => mod.id === MINESCRIPT_MOD_ID && mod.enabled);
 }
+const CAMERA_MOD_ID = "kodland-camera";
+function hasCamera(mods) {
+  return mods.some((mod) => mod.id === CAMERA_MOD_ID && mod.enabled);
+}
 function anyWorldTeaches(manifest, studio) {
   return manifest.worlds.some((world) => world.teaches?.includes(studio) === true);
 }
@@ -16841,8 +17140,524 @@ function resolveStudios(manifest, mods, openWorldIds = [], granted = []) {
   return {
     skins: asked?.skins ?? true,
     datapacks: asked?.datapacks ?? fromWorlds("datapacks", true),
-    python: asked?.python ?? fromWorlds("python", hasMinescript(mods))
+    python: asked?.python ?? fromWorlds("python", hasMinescript(mods)),
+    /*
+     * The mod list and nothing else. Sparks' `studios` has no key for it, and a
+     * Studio of photos with no camera in the game is a room with nothing that
+     * can fill it. A course that wants it adds the mod; one that does not, does not.
+     */
+    albums: hasCamera(mods)
   };
+}
+function albumsDir(dataDir) {
+  return node_path.join(dataDir, "albums");
+}
+const INDEX_FILE$1 = "library.json";
+const PHOTO_CONTRACT_VERSION = 1;
+const CAPTION_MAX = 60;
+const PHOTO_ID = /^\d{8}-\d{6}-[0-9a-f]{6}$/;
+function isPhotoId(value) {
+  return typeof value === "string" && PHOTO_ID.test(value);
+}
+const photoMetaSchema = object$1({
+  version: number().int(),
+  id: string().regex(PHOTO_ID),
+  /** ISO 8601 with the offset the photo was taken in: `2026-10-26T15:30:12+03:00`. */
+  takenAt: string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/),
+  width: number().int().positive(),
+  height: number().int().positive(),
+  world: object$1({ name: string().nullish(), folder: string().nullish() }).nullish(),
+  dimension: string().nullish(),
+  biome: string().nullish()
+});
+function dayFolderOf(id) {
+  return `${id.slice(0, 4)}-${id.slice(4, 6)}-${id.slice(6, 8)}`;
+}
+function photoFile(dataDir, id, kind) {
+  const name = kind === "thumb" ? `${id}.thumb.jpg` : `${id}.${kind}`;
+  return node_path.join(albumsDir(dataDir), "photos", dayFolderOf(id), name);
+}
+async function readIndex$1(dataDir) {
+  const path = node_path.join(albumsDir(dataDir), INDEX_FILE$1);
+  let raw;
+  try {
+    raw = await promises.readFile(path, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return { version: 1, photos: [] };
+    throw error;
+  }
+  const parsed = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.photos)) {
+    throw new Error(`${INDEX_FILE$1} is not a photo index`);
+  }
+  return {
+    version: 1,
+    photos: parsed.photos.filter((entry) => isPhotoId(entry.id))
+  };
+}
+async function writeIndex$1(dataDir, index) {
+  await promises.mkdir(albumsDir(dataDir), { recursive: true });
+  const path = node_path.join(albumsDir(dataDir), INDEX_FILE$1);
+  await writeFileAtomic(path, JSON.stringify(index, null, 2));
+}
+function changeIndex(dataDir, change) {
+  return serialised(node_path.join(albumsDir(dataDir), INDEX_FILE$1), async () => {
+    const index = await readIndex$1(dataDir);
+    const { result, write } = change(index);
+    if (write) await writeIndex$1(dataDir, index);
+    return result;
+  });
+}
+async function moveFile(from, to) {
+  try {
+    await promises.rename(from, to);
+  } catch (error) {
+    if (error.code !== "EXDEV") throw error;
+    await promises.copyFile(from, to);
+    await promises.rm(from, { force: true });
+  }
+}
+function newestFirst(a, b) {
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
+function cleanCaption(text) {
+  const visible = Array.from(text, (char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code < 32 || code === 127 ? " " : char;
+  }).join("");
+  const oneLine = visible.replace(/\s+/g, " ").trim();
+  return Array.from(oneLine).slice(0, CAPTION_MAX).join("").trim();
+}
+async function ingestPhotos(dataDir, inboxes, options = {}) {
+  const outcome = { added: [], skipped: [] };
+  const known = new Set((await readIndex$1(dataDir)).photos.map((entry) => entry.id));
+  for (const inbox of inboxes) {
+    let names;
+    try {
+      names = await promises.readdir(inbox);
+    } catch {
+      continue;
+    }
+    for (const name of names.filter((file) => file.endsWith(".json")).sort()) {
+      const jsonPath = node_path.join(inbox, name);
+      const skip = (reason) => outcome.skipped.push({ file: name, reason });
+      let meta;
+      try {
+        const parsed = photoMetaSchema.safeParse(JSON.parse(await promises.readFile(jsonPath, "utf8")));
+        if (!parsed.success) {
+          skip("the metadata does not match the contract");
+          continue;
+        }
+        meta = parsed.data;
+      } catch {
+        skip("the metadata is not readable JSON");
+        continue;
+      }
+      if (meta.version > PHOTO_CONTRACT_VERSION) {
+        skip(`contract version ${meta.version} is newer than ${PHOTO_CONTRACT_VERSION}`);
+        continue;
+      }
+      if (`${meta.id}.json` !== name) {
+        skip("the file name and the id disagree");
+        continue;
+      }
+      const pngPath = node_path.join(inbox, `${meta.id}.png`);
+      if (known.has(meta.id)) {
+        await promises.rm(pngPath, { force: true });
+        await promises.rm(jsonPath, { force: true });
+        continue;
+      }
+      let size;
+      try {
+        size = pngSize(new Uint8Array(await promises.readFile(pngPath)));
+      } catch {
+        skip("the photo is missing");
+        continue;
+      }
+      if (!size) {
+        skip("the photo is not a PNG");
+        continue;
+      }
+      const target = photoFile(dataDir, meta.id, "png");
+      await promises.mkdir(node_path.join(target, ".."), { recursive: true });
+      await moveFile(pngPath, target);
+      await writeFileAtomic(photoFile(dataDir, meta.id, "json"), await promises.readFile(jsonPath));
+      if (options.makeThumb) {
+        try {
+          const thumb = await options.makeThumb(target);
+          if (thumb) await writeFileAtomic(photoFile(dataDir, meta.id, "thumb"), thumb);
+        } catch {
+        }
+      }
+      const entry = {
+        id: meta.id,
+        day: meta.takenAt.slice(0, 10),
+        takenAt: meta.takenAt,
+        width: size.width,
+        height: size.height,
+        caption: "",
+        ...meta.world?.name ? { world: meta.world.name } : {},
+        ...meta.dimension ? { dimension: meta.dimension } : {},
+        ...meta.biome ? { biome: meta.biome } : {}
+      };
+      await changeIndex(dataDir, (index) => {
+        const isNew = !index.photos.some((photo) => photo.id === entry.id);
+        if (isNew) index.photos.push(entry);
+        return { result: void 0, write: isNew };
+      });
+      known.add(meta.id);
+      outcome.added.push(meta.id);
+      await promises.rm(jsonPath, { force: true });
+    }
+  }
+  return outcome;
+}
+async function listPhotos(dataDir) {
+  const index = await readIndex$1(dataDir);
+  const present = [];
+  for (const entry of index.photos) {
+    try {
+      await promises.stat(photoFile(dataDir, entry.id, "png"));
+      present.push(entry);
+    } catch {
+    }
+  }
+  return present.sort(newestFirst);
+}
+async function setPhotoCaption(dataDir, id, caption) {
+  if (!isPhotoId(id)) return void 0;
+  return changeIndex(dataDir, (index) => {
+    const entry = index.photos.find((photo) => photo.id === id);
+    if (!entry) return { result: void 0, write: false };
+    entry.caption = cleanCaption(caption);
+    return { result: entry.caption, write: true };
+  });
+}
+async function setPhotoPublished(dataDir, id, url) {
+  if (!isPhotoId(id)) return;
+  await changeIndex(dataDir, (index) => {
+    const entry = index.photos.find((photo) => photo.id === id);
+    if (entry) entry.publishedUrl = url;
+    return { result: void 0, write: entry !== void 0 };
+  });
+}
+async function removePhoto(dataDir, id) {
+  if (!isPhotoId(id)) return false;
+  for (const kind of ["png", "json", "thumb"]) {
+    await promises.rm(photoFile(dataDir, id, kind), { force: true });
+  }
+  return changeIndex(dataDir, (index) => {
+    const before = index.photos.length;
+    index.photos = index.photos.filter((photo) => photo.id !== id);
+    const removed = index.photos.length !== before;
+    return { result: removed, write: removed };
+  });
+}
+const PAGE_WIDTH = 1200;
+const PAGE_HEIGHT = 900;
+const MAX_PAGES = 40;
+const MAX_ITEMS_PER_PAGE = 24;
+const ALBUM_TITLE_MAX = 40;
+const PAGE_BACKGROUNDS = [
+  "paper",
+  "grid",
+  "sunset",
+  "kraft",
+  "night",
+  "blocks",
+  "ocean",
+  "aurora",
+  "confetti",
+  "candy"
+];
+const FRAME_COLORS = [
+  "white",
+  "cream",
+  "black",
+  "pink",
+  "coral",
+  "lemon",
+  "mint",
+  "sky",
+  "lavender",
+  "kraft"
+];
+const ALBUM_ID = /^a-[0-9a-f]{12}$/;
+const LOCAL_ID = /^[a-z0-9-]{1,32}$/;
+function isAlbumId(value) {
+  return typeof value === "string" && ALBUM_ID.test(value);
+}
+const photoItemSchema = object$1({
+  id: string().regex(LOCAL_ID),
+  kind: literal("photo"),
+  photoId: string().refine(isPhotoId),
+  /** Centre of the polaroid, in page units. */
+  x: number().min(-PAGE_WIDTH).max(PAGE_WIDTH * 2),
+  y: number().min(-PAGE_HEIGHT).max(PAGE_HEIGHT * 2),
+  /** Width of the photo inside the frame, in page units. */
+  width: number().min(60).max(PAGE_WIDTH),
+  /** Degrees, clockwise. */
+  rotation: number().min(-180).max(180),
+  /** Stacking order; higher is on top. */
+  z: number().int().min(0).max(1e4),
+  /**
+   * The line under this polaroid on this page. Absent means "the caption the
+   * photo has in the library", so a caption written once shows everywhere until
+   * the child writes a different one here.
+   */
+  caption: string().max(80).optional(),
+  /** The frame's colour; absent is white, the polaroid's own. */
+  frame: _enum(FRAME_COLORS).optional()
+});
+const pageSchema = object$1({
+  id: string().regex(LOCAL_ID),
+  background: _enum(PAGE_BACKGROUNDS),
+  items: array(photoItemSchema).max(MAX_ITEMS_PER_PAGE)
+});
+const albumSchema = object$1({
+  version: literal(1),
+  id: string().regex(ALBUM_ID),
+  title: string().max(ALBUM_TITLE_MAX),
+  createdAt: string(),
+  updatedAt: string(),
+  /** The photo on the cover; absent means the first photo of the first page. */
+  coverPhotoId: string().refine(isPhotoId).optional(),
+  /** The card on Sparks, once the album was published. */
+  publishedUrl: string().startsWith("https://").max(300).optional(),
+  pages: array(pageSchema).min(1).max(MAX_PAGES)
+});
+const albumToWriteSchema = albumSchema.extend({
+  title: string().transform(cleanTitle$1).pipe(string().min(1))
+});
+function booksDir(dataDir) {
+  return node_path.join(albumsDir(dataDir), "books");
+}
+function albumFile(dataDir, id) {
+  return node_path.join(booksDir(dataDir), id, "album.json");
+}
+function localId() {
+  return node_crypto.randomBytes(5).toString("hex");
+}
+function coverOf(doc2) {
+  return doc2.coverPhotoId ?? doc2.pages.flatMap((page) => page.items)[0]?.photoId;
+}
+async function readAlbum(dataDir, id) {
+  if (!isAlbumId(id)) return void 0;
+  try {
+    const parsed = albumSchema.safeParse(
+      JSON.parse(await promises.readFile(albumFile(dataDir, id), "utf8"))
+    );
+    return parsed.success && parsed.data.id === id ? parsed.data : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function listAlbums(dataDir) {
+  let names;
+  try {
+    names = await promises.readdir(booksDir(dataDir));
+  } catch {
+    return [];
+  }
+  const summaries = [];
+  for (const name of names) {
+    const doc2 = await readAlbum(dataDir, name);
+    if (!doc2) continue;
+    const cover = coverOf(doc2);
+    summaries.push({
+      id: doc2.id,
+      title: doc2.title,
+      updatedAt: doc2.updatedAt,
+      pages: doc2.pages.length,
+      photos: doc2.pages.reduce((sum, page) => sum + page.items.length, 0),
+      firstPage: doc2.pages[0],
+      ...cover === void 0 ? {} : { coverPhotoId: cover }
+    });
+  }
+  return summaries.sort(
+    (a, b) => a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0
+  );
+}
+async function writeAlbum(dataDir, doc2) {
+  const path = albumFile(dataDir, doc2.id);
+  await promises.mkdir(node_path.join(path, ".."), { recursive: true });
+  await writeFileAtomic(path, JSON.stringify(doc2, null, 2));
+}
+async function createAlbum(dataDir, title, pages, now = /* @__PURE__ */ new Date()) {
+  const doc2 = {
+    version: 1,
+    id: `a-${node_crypto.randomBytes(6).toString("hex")}`,
+    title: cleanTitle$1(title),
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    pages: pages && pages.length > 0 ? pages : [{ id: localId(), background: "paper", items: [] }]
+  };
+  const parsed = albumToWriteSchema.safeParse(doc2);
+  if (!parsed.success) return void 0;
+  await writeAlbum(dataDir, parsed.data);
+  return parsed.data;
+}
+async function saveAlbum(dataDir, candidate, now = /* @__PURE__ */ new Date()) {
+  const parsed = albumToWriteSchema.safeParse(candidate);
+  if (!parsed.success) return void 0;
+  const existing = await readAlbum(dataDir, parsed.data.id);
+  if (!existing) return void 0;
+  const doc2 = {
+    ...parsed.data,
+    createdAt: existing.createdAt,
+    updatedAt: now.toISOString()
+  };
+  await writeAlbum(dataDir, doc2);
+  return doc2;
+}
+async function setAlbumPublished(dataDir, id, url) {
+  const doc2 = await readAlbum(dataDir, id);
+  if (!doc2) return;
+  await writeAlbum(dataDir, { ...doc2, publishedUrl: url });
+}
+async function removeAlbum(dataDir, id) {
+  if (!isAlbumId(id)) return false;
+  try {
+    await promises.rm(node_path.join(booksDir(dataDir), id), { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function forgetPhotoInAlbums(dataDir, photoId) {
+  let changed = 0;
+  for (const summary of await listAlbums(dataDir)) {
+    const doc2 = await readAlbum(dataDir, summary.id);
+    if (!doc2) continue;
+    let touched = false;
+    for (const page of doc2.pages) {
+      const before = page.items.length;
+      page.items = page.items.filter((item) => item.photoId !== photoId);
+      if (page.items.length !== before) touched = true;
+    }
+    if (doc2.coverPhotoId === photoId) {
+      delete doc2.coverPhotoId;
+      touched = true;
+    }
+    if (touched) {
+      await writeAlbum(dataDir, doc2);
+      changed += 1;
+    }
+  }
+  return changed;
+}
+function cleanTitle$1(text) {
+  const visible = Array.from(text, (char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code < 32 || code === 127 ? " " : char;
+  }).join("");
+  return Array.from(visible.replace(/\s+/g, " ").trim()).slice(0, ALBUM_TITLE_MAX).join("").trim();
+}
+const COLLECTION_TITLE_MAX = 40;
+const MAX_COLLECTIONS = 100;
+const MAX_PHOTOS_PER_COLLECTION = 1e3;
+const COLLECTION_ID = /^c-[0-9a-f]{12}$/;
+function isCollectionId(value) {
+  return typeof value === "string" && COLLECTION_ID.test(value);
+}
+const collectionSchema = object$1({
+  id: string().regex(COLLECTION_ID),
+  title: string().max(COLLECTION_TITLE_MAX),
+  createdAt: string(),
+  /** In the order they were added. */
+  photoIds: array(string().refine(isPhotoId)).max(MAX_PHOTOS_PER_COLLECTION)
+});
+const collectionToWriteSchema = collectionSchema.extend({
+  title: string().transform(cleanTitle).pipe(string().min(1))
+});
+const fileSchema = object$1({
+  version: literal(1),
+  collections: array(collectionSchema).max(MAX_COLLECTIONS)
+});
+function collectionsFile(dataDir) {
+  return node_path.join(albumsDir(dataDir), "collections.json");
+}
+async function readAll(dataDir) {
+  let raw;
+  try {
+    raw = await promises.readFile(collectionsFile(dataDir), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  return fileSchema.parse(JSON.parse(raw)).collections;
+}
+async function writeAll(dataDir, collections) {
+  await promises.mkdir(albumsDir(dataDir), { recursive: true });
+  const path = collectionsFile(dataDir);
+  await writeFileAtomic(path, JSON.stringify({ version: 1, collections }, null, 2));
+}
+function changeAll(dataDir, change) {
+  return serialised(collectionsFile(dataDir), async () => {
+    const { result, write } = change(await readAll(dataDir));
+    if (write) await writeAll(dataDir, write);
+    return result;
+  });
+}
+function cleanTitle(text) {
+  const visible = Array.from(text, (char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code < 32 || code === 127 ? " " : char;
+  }).join("");
+  return Array.from(visible.replace(/\s+/g, " ").trim()).slice(0, COLLECTION_TITLE_MAX).join("").trim();
+}
+async function listCollections(dataDir) {
+  return [...await readAll(dataDir)].reverse();
+}
+async function createCollection(dataDir, title, photoIds = [], now = /* @__PURE__ */ new Date()) {
+  const candidate = collectionToWriteSchema.safeParse({
+    id: `c-${node_crypto.randomBytes(6).toString("hex")}`,
+    title,
+    createdAt: now.toISOString(),
+    photoIds: [...new Set(photoIds)]
+  });
+  if (!candidate.success) return void 0;
+  const created = candidate.data;
+  return changeAll(
+    dataDir,
+    (all) => all.length >= MAX_COLLECTIONS ? { result: void 0, write: void 0 } : { result: created, write: [...all, created] }
+  );
+}
+async function saveCollection(dataDir, candidate) {
+  const parsed = collectionToWriteSchema.safeParse(candidate);
+  if (!parsed.success) return void 0;
+  const edited = parsed.data;
+  return changeAll(dataDir, (all) => {
+    const at = all.findIndex((collection) => collection.id === edited.id);
+    const existing = all[at];
+    if (!existing) return { result: void 0, write: void 0 };
+    const saved = {
+      ...edited,
+      createdAt: existing.createdAt,
+      photoIds: [...new Set(edited.photoIds)]
+    };
+    all[at] = saved;
+    return { result: saved, write: all };
+  });
+}
+async function removeCollection(dataDir, id) {
+  if (!isCollectionId(id)) return false;
+  return changeAll(dataDir, (all) => {
+    const left = all.filter((collection) => collection.id !== id);
+    const removed = left.length !== all.length;
+    return { result: removed, write: removed ? left : void 0 };
+  });
+}
+async function forgetPhotoInCollections(dataDir, photoId) {
+  return changeAll(dataDir, (all) => {
+    let changed = 0;
+    for (const collection of all) {
+      const before = collection.photoIds.length;
+      collection.photoIds = collection.photoIds.filter((id) => id !== photoId);
+      if (collection.photoIds.length !== before) changed += 1;
+    }
+    return { result: changed, write: changed > 0 ? all : void 0 };
+  });
 }
 function skinLibraryDir(dataDir) {
   return node_path.join(dataDir, "skins");
@@ -16866,9 +17681,7 @@ async function readIndex(dataDir) {
 }
 async function writeIndex(dataDir, index) {
   const path = node_path.join(skinLibraryDir(dataDir), INDEX_FILE);
-  const partial2 = `${path}.part`;
-  await promises.writeFile(partial2, JSON.stringify(index, null, 2));
-  await promises.rename(partial2, path);
+  await writeFileAtomic(path, JSON.stringify(index, null, 2));
 }
 async function addToLibrary(dataDir, png, title, projectId, now = /* @__PURE__ */ new Date()) {
   const size = pngSize(png);
@@ -16879,9 +17692,7 @@ async function addToLibrary(dataDir, png, title, projectId, now = /* @__PURE__ *
   const existing = index[id];
   if (!existing) {
     const path = fileFor(dataDir, id);
-    const partial2 = `${path}.part`;
-    await promises.writeFile(partial2, png);
-    await promises.rename(partial2, path);
+    await writeFileAtomic(path, png);
     index[id] = {
       title,
       addedAt: now.toISOString(),
@@ -16896,12 +17707,14 @@ async function addToLibrary(dataDir, png, title, projectId, now = /* @__PURE__ *
       title: record2.title,
       addedAt: record2.addedAt,
       ...record2.projectId === void 0 ? {} : { projectId: record2.projectId },
+      ...record2.projectOwner === void 0 ? {} : { projectOwner: record2.projectOwner },
+      ...record2.own === true ? { own: true } : {},
       ...size
     },
     alreadyThere: existing !== void 0
   };
 }
-async function stampLibraryProject(dataDir, id, projectId, title) {
+async function stampLibraryProject(dataDir, id, projectId, title, owner) {
   if (!/^[0-9a-f]{16}$/.test(id)) return false;
   let onDisk = true;
   try {
@@ -16912,14 +17725,49 @@ async function stampLibraryProject(dataDir, id, projectId, title) {
   if (!onDisk) return false;
   const index = await readIndex(dataDir);
   const existing = index[id];
-  const keptTitle = existing?.title ? existing.title : "";
+  const keptTitle = existing?.title ? existing.title : title ?? "";
   index[id] = {
     title: keptTitle,
     addedAt: existing?.addedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
-    projectId
+    projectId,
+    ...owner !== void 0 ? { projectOwner: owner } : existing?.projectId === projectId && existing.projectOwner !== void 0 ? { projectOwner: existing.projectOwner } : {},
+    ...existing?.own === true ? { own: true } : {}
   };
   await writeIndex(dataDir, index);
   return true;
+}
+async function releaseLibraryProject(dataDir, projectId, keepId) {
+  const index = await readIndex(dataDir);
+  let changed = false;
+  for (const [id, row] of Object.entries(index)) {
+    if (id === keepId || row.projectId !== projectId) continue;
+    index[id] = { title: row.title, addedAt: row.addedAt, own: true };
+    changed = true;
+  }
+  if (changed) await writeIndex(dataDir, index);
+}
+async function markLibraryOwn(dataDir, id) {
+  if (!/^[0-9a-f]{16}$/.test(id)) return false;
+  try {
+    await promises.stat(fileFor(dataDir, id));
+  } catch {
+    return false;
+  }
+  const index = await readIndex(dataDir);
+  const existing = index[id];
+  if (existing?.own === true) return true;
+  index[id] = {
+    title: existing?.title ?? "",
+    addedAt: existing?.addedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+    ...existing?.projectId === void 0 ? {} : { projectId: existing.projectId },
+    ...existing?.projectOwner === void 0 ? {} : { projectOwner: existing.projectOwner },
+    own: true
+  };
+  await writeIndex(dataDir, index);
+  return true;
+}
+function isOwnSkin(entry) {
+  return entry.own === true || entry.projectId === void 0;
 }
 async function readPngHeader(path) {
   let handle;
@@ -16958,6 +17806,8 @@ async function listLibrary(dataDir) {
       title: record2?.title ?? "",
       addedAt: record2?.addedAt ?? "",
       ...record2?.projectId === void 0 ? {} : { projectId: record2.projectId },
+      ...record2?.projectOwner === void 0 ? {} : { projectOwner: record2.projectOwner },
+      ...record2?.own === true ? { own: true } : {},
       ...size
     };
   });
@@ -17031,9 +17881,7 @@ async function readDefaultSkins(dataDir, instanceDir, minecraftVersion2) {
     const png = new Uint8Array(await entry.async("uint8array"));
     if (!pngSize(png)) continue;
     const path = node_path.join(directory, `${id}.png`);
-    const partial2 = `${path}.part`;
-    await promises.writeFile(partial2, png);
-    await promises.rename(partial2, path);
+    await writeFileAtomic(path, png);
     found.push({ id, png });
   }
   return DEFAULT_SKIN_IDS.flatMap((id) => found.filter((skin) => skin.id === id));
@@ -17051,19 +17899,19 @@ const nbtLong = (value) => ({ kind: "long", value });
 const nbtString = (value) => ({ kind: "string", value });
 const nbtCompound = (value) => ({ kind: "compound", value });
 const nbtStringList = (value) => ({ kind: "stringList", value });
-const TAG_END = 0;
+const TAG_END$1 = 0;
 const TAG_BYTE = 1;
-const TAG_INT = 3;
+const TAG_INT$1 = 3;
 const TAG_LONG = 4;
 const TAG_STRING = 8;
 const TAG_LIST = 9;
-const TAG_COMPOUND = 10;
+const TAG_COMPOUND$1 = 10;
 const TYPE_IDS = {
   byte: TAG_BYTE,
-  int: TAG_INT,
+  int: TAG_INT$1,
   long: TAG_LONG,
   string: TAG_STRING,
-  compound: TAG_COMPOUND,
+  compound: TAG_COMPOUND$1,
   stringList: TAG_LIST
 };
 function encodeNbt(root) {
@@ -17106,12 +17954,12 @@ function writePayload(value) {
     case "string":
       return writeString(value.value);
     case "compound": {
-      const parts = Object.entries(value.value).map(([key, child]) => writeTag(key, child));
-      return Buffer.concat([...parts, Buffer.from([TAG_END])]);
+      const parts = Object.entries(value.value).map(([key, child2]) => writeTag(key, child2));
+      return Buffer.concat([...parts, Buffer.from([TAG_END$1])]);
     }
     case "stringList": {
       const header = Buffer.alloc(5);
-      header.writeInt8(value.value.length === 0 ? TAG_END : TAG_STRING, 0);
+      header.writeInt8(value.value.length === 0 ? TAG_END$1 : TAG_STRING, 0);
       header.writeInt32BE(value.value.length, 1);
       return Buffer.concat([header, ...value.value.map((entry) => writeString(entry))]);
     }
@@ -17181,9 +18029,11 @@ function buildLevelData(options) {
       version: nbtInt(ANVIL_FORMAT_VERSION),
       LevelName: nbtString(worldName),
       // Survival, normal difficulty, no cheats: the plain default a child
-      // expects. The Studio (R3.1) will need commands, and that is a decision
-      // for that release rather than something to switch on quietly now.
-      GameType: nbtInt(0),
+      // expects. Creative only when the child asked for it (D-061), and
+      // cheats stay off in both modes. The Studio (R3.1) will need commands,
+      // and that is a decision for that release rather than something to
+      // switch on quietly now.
+      GameType: nbtInt(gameTypeOf(options.gameMode ?? "survival")),
       Difficulty: nbtByte(2),
       DifficultyLocked: nbtByte(0),
       hardcore: nbtByte(0),
@@ -17218,6 +18068,9 @@ function buildLevelData(options) {
     })
   };
 }
+function gameTypeOf(mode) {
+  return mode === "creative" ? 1 : 0;
+}
 function encodeLevelDat(options) {
   return node_zlib.gzipSync(encodeNbt(buildLevelData(options)));
 }
@@ -17247,13 +18100,294 @@ function encodeWorldGenSettings(seed, version2) {
     })
   );
 }
-async function writeWorld(worldDir, worldName, seed, version2, now = /* @__PURE__ */ new Date()) {
+async function writeWorld(worldDir, worldName, seed, version2, now = /* @__PURE__ */ new Date(), gameMode = "survival") {
   await promises.mkdir(node_path.join(worldDir, WORLD_GEN_SETTINGS_PATH[0], WORLD_GEN_SETTINGS_PATH[1]), {
     recursive: true
   });
-  await promises.writeFile(node_path.join(worldDir, "level.dat"), encodeLevelDat({ worldName, version: version2, now }));
+  await promises.writeFile(node_path.join(worldDir, "level.dat"), encodeLevelDat({ worldName, version: version2, now, gameMode }));
   await promises.writeFile(node_path.join(worldDir, ...WORLD_GEN_SETTINGS_PATH), encodeWorldGenSettings(seed, version2));
   enableCheatsInLevelDat(node_path.join(worldDir, "level.dat"));
+}
+const MAX_DEPTH$2 = 64;
+class Reader {
+  constructor(bytes) {
+    this.bytes = bytes;
+  }
+  bytes;
+  offset = 0;
+  need(count) {
+    if (count < 0 || this.offset + count > this.bytes.length) throw new RangeError("short NBT");
+  }
+  byte() {
+    this.need(1);
+    return this.bytes.readInt8(this.offset++);
+  }
+  short() {
+    this.need(2);
+    const value = this.bytes.readInt16BE(this.offset);
+    this.offset += 2;
+    return value;
+  }
+  int() {
+    this.need(4);
+    const value = this.bytes.readInt32BE(this.offset);
+    this.offset += 4;
+    return value;
+  }
+  long() {
+    this.need(8);
+    const value = this.bytes.readBigInt64BE(this.offset);
+    this.offset += 8;
+    return value;
+  }
+  skip(count) {
+    this.need(count);
+    this.offset += count;
+  }
+  string() {
+    const length = this.short() & 65535;
+    this.need(length);
+    const value = this.bytes.toString("utf8", this.offset, this.offset + length);
+    this.offset += length;
+    return value;
+  }
+}
+function payload(reader, type, depth) {
+  if (depth > MAX_DEPTH$2) throw new RangeError("NBT too deep");
+  switch (type) {
+    case 1:
+      return reader.byte();
+    case 2:
+      return reader.short();
+    case 3:
+      return reader.int();
+    case 4:
+      return reader.long();
+    case 5:
+      reader.skip(4);
+      return void 0;
+    case 6:
+      reader.skip(8);
+      return void 0;
+    case 7:
+      reader.skip(reader.int());
+      return void 0;
+    case 8:
+      return reader.string();
+    case 9: {
+      const itemType = reader.byte();
+      const count = reader.int();
+      if (count < 0) throw new RangeError("negative NBT list");
+      for (let index = 0; index < count; index += 1) payload(reader, itemType, depth + 1);
+      return void 0;
+    }
+    case 10:
+      return compound(reader, depth + 1);
+    case 11:
+      reader.skip(reader.int() * 4);
+      return void 0;
+    case 12:
+      reader.skip(reader.int() * 8);
+      return void 0;
+    default:
+      throw new RangeError(`unknown NBT tag ${type}`);
+  }
+}
+function compound(reader, depth) {
+  const values = /* @__PURE__ */ new Map();
+  for (; ; ) {
+    const type = reader.byte();
+    if (type === 0) return values;
+    const name = reader.string();
+    values.set(name, payload(reader, type, depth));
+  }
+}
+function readNbtFile(bytes) {
+  try {
+    const reader = new Reader(node_zlib.gunzipSync(bytes));
+    if (reader.byte() !== 10) return void 0;
+    reader.string();
+    return compound(reader, 0);
+  } catch {
+    return void 0;
+  }
+}
+function child(value, name) {
+  return value instanceof Map ? value.get(name) : void 0;
+}
+function worldSeedOf(files) {
+  const settings = files.worldGenSettings ? readNbtFile(files.worldGenSettings) : void 0;
+  const fromSettings = child(child(settings, "data"), "seed");
+  if (typeof fromSettings === "bigint") return fromSettings;
+  const level = files.levelDat ? readNbtFile(files.levelDat) : void 0;
+  const data = child(level, "Data");
+  const fromLevel = child(child(data, "WorldGenSettings"), "seed");
+  if (typeof fromLevel === "bigint") return fromLevel;
+  const old = child(data, "RandomSeed");
+  return typeof old === "bigint" ? old : void 0;
+}
+const TAG_END = 0;
+const TAG_INT = 3;
+const TAG_COMPOUND = 10;
+const MAX_DEPTH$1 = 64;
+function levelGameModeOf(bytes) {
+  const root = readNbtFile(bytes);
+  if (!root) return void 0;
+  const data = root.get("Data");
+  if (!(data instanceof Map)) return void 0;
+  const world = data.get("GameType");
+  const player = data.get("Player");
+  const playerType = player instanceof Map ? player.get("playerGameType") : void 0;
+  return {
+    world: typeof world === "number" ? world : void 0,
+    player: typeof playerType === "number" ? playerType : void 0
+  };
+}
+function isInGameMode(bytes, mode) {
+  const now = levelGameModeOf(bytes);
+  if (!now) return false;
+  const wanted = gameTypeOf(mode);
+  return now.world === wanted && (now.player === void 0 || now.player === wanted);
+}
+function withLevelGameMode(bytes, mode) {
+  let raw;
+  try {
+    raw = node_zlib.gunzipSync(bytes);
+  } catch {
+    return void 0;
+  }
+  let found;
+  try {
+    found = findModeTags(raw);
+  } catch {
+    return void 0;
+  }
+  if (found.dataEnd === void 0) return void 0;
+  const value = gameTypeOf(mode);
+  const out = Buffer.from(raw);
+  for (const offset of found.intOffsets) out.writeInt32BE(value, offset);
+  if (found.gameTypeOffset !== void 0) {
+    out.writeInt32BE(value, found.gameTypeOffset);
+    return node_zlib.gzipSync(out);
+  }
+  const root = encodeNbt({ GameType: nbtInt(value) });
+  const tag = root.subarray(3, root.length - 1);
+  return node_zlib.gzipSync(Buffer.concat([out.subarray(0, found.dataEnd), tag, out.subarray(found.dataEnd)]));
+}
+function findModeTags(raw) {
+  const walker = new Walker(raw);
+  const found = { gameTypeOffset: void 0, intOffsets: [], dataEnd: void 0 };
+  if (walker.byte() !== TAG_COMPOUND) throw new RangeError("the root is not a compound");
+  walker.string();
+  walker.compound(0, (name, type) => {
+    if (name !== "Data" || type !== TAG_COMPOUND) return false;
+    found.dataEnd = walker.compound(1, (dataName, dataType) => {
+      if (dataName === "GameType" && dataType === TAG_INT) {
+        found.gameTypeOffset = walker.offset;
+        return false;
+      }
+      if (dataName === "Player" && dataType === TAG_COMPOUND) {
+        walker.compound(2, (playerName, playerType) => {
+          if (playerName === "playerGameType" && playerType === TAG_INT) {
+            found.intOffsets.push(walker.offset);
+          }
+          return false;
+        });
+        return true;
+      }
+      return false;
+    });
+    return true;
+  });
+  return found;
+}
+class Walker {
+  constructor(bytes) {
+    this.bytes = bytes;
+  }
+  bytes;
+  offset = 0;
+  need(count) {
+    if (count < 0 || this.offset + count > this.bytes.length) throw new RangeError("short NBT");
+  }
+  byte() {
+    this.need(1);
+    return this.bytes.readInt8(this.offset++);
+  }
+  int() {
+    this.need(4);
+    const value = this.bytes.readInt32BE(this.offset);
+    this.offset += 4;
+    return value;
+  }
+  skip(count) {
+    this.need(count);
+    this.offset += count;
+  }
+  string() {
+    this.need(2);
+    const length = this.bytes.readUInt16BE(this.offset);
+    this.offset += 2;
+    this.need(length);
+    const value = this.bytes.toString("utf8", this.offset, this.offset + length);
+    this.offset += length;
+    return value;
+  }
+  /**
+   * Walk one compound. `visit` sees each tag with the offset at its payload;
+   * it returns true when it has read the payload itself, false to have it
+   * skipped. Returns the offset of the compound's end byte.
+   */
+  compound(depth, visit) {
+    if (depth > MAX_DEPTH$1) throw new RangeError("NBT too deep");
+    for (; ; ) {
+      const at = this.offset;
+      const type = this.byte();
+      if (type === TAG_END) return at;
+      const name = this.string();
+      if (!visit(name, type)) this.payload(type, depth + 1);
+    }
+  }
+  payload(type, depth) {
+    if (depth > MAX_DEPTH$1) throw new RangeError("NBT too deep");
+    switch (type) {
+      case 1:
+        return this.skip(1);
+      case 2:
+        return this.skip(2);
+      case 3:
+      case 5:
+        return this.skip(4);
+      case 4:
+      case 6:
+        return this.skip(8);
+      case 7:
+        return this.skip(this.count());
+      case 8:
+        this.string();
+        return;
+      case 9: {
+        const itemType = this.byte();
+        const count = this.count();
+        for (let index = 0; index < count; index += 1) this.payload(itemType, depth + 1);
+        return;
+      }
+      case 10:
+        this.compound(depth + 1, () => false);
+        return;
+      case 11:
+        return this.skip(this.count() * 4);
+      case 12:
+        return this.skip(this.count() * 8);
+      default:
+        throw new RangeError(`unknown NBT tag ${type}`);
+    }
+  }
+  count() {
+    const count = this.int();
+    if (count < 0) throw new RangeError("negative NBT length");
+    return count;
+  }
 }
 const PRESET_WORLDS = [
   { id: "world-1", folder: "World1", seed: 777n },
@@ -17271,17 +18405,6 @@ function findPreset(id) {
   return PRESET_WORLDS.find((world) => world.id === id);
 }
 function listTemplates(open, library) {
-  const mainmenu = {
-    id: "minecraft-menu",
-    kind: "preset",
-    seed: null,
-    title: "Ana Menü (Standart Minecraft)",
-    description: "Dünyasız başlat - Minecraft ana menüsüne girer",
-    artKey: null,
-    revision: null,
-    previewKey: null,
-    ready: true
-  };
   const random = {
     id: RANDOM_WORLD_ID,
     kind: "random",
@@ -17307,7 +18430,7 @@ function listTemplates(open, library) {
         ready: library.get(world.id) === world.revision
       })
     );
-    return [mainmenu, ...lessons, random];
+    return [...lessons, random];
   }
   const presets = PRESET_WORLDS.map(
     (world) => ({
@@ -17322,7 +18445,7 @@ function listTemplates(open, library) {
       ready: true
     })
   );
-  return [mainmenu, ...presets, random];
+  return [...presets, random];
 }
 const MAX_FOLDER = 32;
 const MAX_NAME = 60;
@@ -17335,16 +18458,22 @@ async function readMyWorlds(dataDir, packId) {
     if (typeof parsed !== "object" || parsed === null) return [];
     const worlds = parsed.worlds;
     if (!Array.isArray(worlds)) return [];
-    return worlds.filter(isMyWorld);
+    const valid = worlds.filter(isMyWorld);
+    const layout = instanceLayout(dataDir, packId);
+    const existing = valid.filter((w) => node_fs.existsSync(node_path.join(layout.saves, w.folder)));
+    if (existing.length !== valid.length) {
+      await writeMyWorlds(dataDir, packId, existing);
+    }
+    return existing;
   } catch {
     return [];
   }
 }
 function isSafeFolderName(folder) {
   if (folder === "" || folder === "." || folder === "..") return false;
-  return !SEPARATOR.test(folder);
+  return !SEPARATOR$1.test(folder);
 }
-const SEPARATOR = /[/\\]/;
+const SEPARATOR$1 = /[/\\]/;
 function isMyWorld(value) {
   if (typeof value !== "object" || value === null) return false;
   const entry = value;
@@ -17383,16 +18512,8 @@ async function writeMyWorlds(dataDir, packId, worlds) {
   await promises.mkdir(layout.instance, { recursive: true });
   const path = statePath(dataDir, packId);
   const state = { version: 1, worlds: [...worlds] };
-  const temporary = `${path}.${node_crypto.randomUUID()}.part`;
-  await promises.writeFile(temporary, `${JSON.stringify(state, null, 2)}
+  await writeFileAtomic(path, `${JSON.stringify(state, null, 2)}
 `);
-  try {
-    await promises.rename(temporary, path);
-  } catch (error) {
-    await promises.unlink(temporary).catch(() => {
-    });
-    throw error;
-  }
 }
 function folderBaseOf(wanted, fallback = "world") {
   const kept = wanted.replace(/[^A-Za-z0-9_-]+/g, "").trim();
@@ -17402,15 +18523,16 @@ function folderBaseOf(wanted, fallback = "world") {
 }
 async function claimFolder(dataDir, packId, base, taken) {
   const layout = instanceLayout(dataDir, packId);
-  await promises.mkdir(layout.saves, { recursive: true });
+  await promises.mkdir(layout.worldStaging, { recursive: true });
   const used = new Set(taken);
   for (let attempt = 0; attempt < 64; attempt += 1) {
     const candidate = uniqueId(used, base);
+    used.add(candidate);
+    if (await exists(node_path.join(layout.saves, candidate))) continue;
     try {
-      await promises.mkdir(node_path.join(layout.saves, candidate));
+      await promises.mkdir(node_path.join(layout.worldStaging, candidate));
       return candidate;
     } catch {
-      used.add(candidate);
     }
   }
   throw new Error(`could not find a free world folder for "${base}"`);
@@ -17443,18 +18565,31 @@ async function writeCopy(dataDir, packId, template, version2) {
     base,
     worlds.map((entry) => entry.folder)
   );
-  const target = node_path.join(layout.saves, folder);
+  const staged = node_path.join(layout.worldStaging, folder);
+  let warning;
   try {
     if (source === void 0) {
-      if (!version2) return { ok: false, reason: "game-not-installed" };
-      await writeWorld(target, folder, seed, version2);
+      if (!version2) {
+        await promises.rm(staged, { recursive: true, force: true }).catch(() => {
+        });
+        return { ok: false, reason: "game-not-installed" };
+      }
+      await writeWorld(staged, folder, seed, version2, /* @__PURE__ */ new Date(), gameModeOf(template));
     } else {
-      await promises.cp(source, target, { recursive: true });
+      await promises.cp(source, staged, { recursive: true });
+      warning = await setCopyGameMode(staged, gameModeOf(template));
     }
-  } catch {
-    await promises.rm(target, { recursive: true, force: true }).catch(() => {
+    if (!await exists(node_path.join(staged, "level.dat"))) {
+      await promises.rm(staged, { recursive: true, force: true }).catch(() => {
+      });
+      return { ok: false, reason: "failed", detail: "the copy has no level.dat" };
+    }
+    await promises.mkdir(layout.saves, { recursive: true });
+    await renameDirectory(staged, node_path.join(layout.saves, folder));
+  } catch (error) {
+    await promises.rm(staged, { recursive: true, force: true }).catch(() => {
     });
-    return { ok: false, reason: "failed" };
+    return { ok: false, reason: "failed", detail: String(error) };
   }
   const world = {
     id: uniqueId(
@@ -17464,10 +18599,28 @@ async function writeCopy(dataDir, packId, template, version2) {
     folder,
     name: "",
     source: sourceOf(template, seed),
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    ...gameModeOf(template) === "creative" && warning === void 0 ? { gameMode: "creative" } : {}
   };
   await writeMyWorlds(dataDir, packId, [...worlds, world]);
-  return { ok: true, world };
+  return warning === void 0 ? { ok: true, world } : { ok: true, world, warning };
+}
+function gameModeOf(template) {
+  return template.kind === "preset" ? "survival" : template.gameMode ?? "survival";
+}
+async function setCopyGameMode(staged, mode) {
+  const path = node_path.join(staged, "level.dat");
+  let bytes;
+  try {
+    bytes = await promises.readFile(path);
+  } catch {
+    return void 0;
+  }
+  if (isInGameMode(bytes, mode)) return void 0;
+  const patched = withLevelGameMode(bytes, mode);
+  if (!patched) return `could not set the game mode to ${mode}: level.dat is not readable NBT`;
+  await writeFileAtomic(path, patched);
+  return void 0;
 }
 function sourceOf(template, seed) {
   switch (template.kind) {
@@ -17478,6 +18631,45 @@ function sourceOf(template, seed) {
     case "random":
       return { kind: "random", seed: seed.toString() };
   }
+}
+async function importMyWorld(dataDir, packId, options) {
+  return serialized(dataDir, packId, async () => {
+    const layout = instanceLayout(dataDir, packId);
+    const worlds = await readMyWorlds(dataDir, packId);
+    const folder = await claimFolder(
+      dataDir,
+      packId,
+      folderBaseOf(options.folderBase),
+      worlds.map((entry) => entry.folder)
+    );
+    const staged = node_path.join(layout.worldStaging, folder);
+    try {
+      await options.fill(staged);
+      if (!await exists(node_path.join(staged, "level.dat"))) {
+        await promises.rm(staged, { recursive: true, force: true }).catch(() => {
+        });
+        return { ok: false, reason: "failed", detail: "the import has no level.dat" };
+      }
+      await promises.mkdir(layout.saves, { recursive: true });
+      await renameDirectory(staged, node_path.join(layout.saves, folder));
+    } catch (error) {
+      await promises.rm(staged, { recursive: true, force: true }).catch(() => {
+      });
+      return { ok: false, reason: "failed", detail: String(error) };
+    }
+    const world = {
+      id: uniqueId(
+        worlds.map((entry) => entry.id),
+        slugify(folder, "world")
+      ),
+      folder,
+      name: options.name.slice(0, MAX_NAME),
+      source: options.source,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await writeMyWorlds(dataDir, packId, [...worlds, world]);
+    return { ok: true, world };
+  });
 }
 async function renameMyWorld(dataDir, packId, id, name) {
   return serialized(dataDir, packId, async () => {
@@ -17501,6 +18693,65 @@ async function exists(path) {
     return false;
   }
 }
+async function renameDirectory(from, to) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await promises.rename(from, to);
+      return;
+    } catch (error) {
+      const code = error.code;
+      const busy = code === "EPERM" || code === "EBUSY" || code === "EACCES";
+      if (!busy || attempt >= 10) throw error;
+      await new Promise((resolve2) => setTimeout(resolve2, 100));
+    }
+  }
+}
+async function sweepBrokenCopies(dataDir, packId, worlds) {
+  return serialized(dataDir, packId, () => sweep(dataDir, packId, worlds));
+}
+async function sweep(dataDir, packId, worlds) {
+  const layout = instanceLayout(dataDir, packId);
+  const swept = [];
+  const remove = async (path, folder) => {
+    try {
+      await promises.rm(path, { recursive: true, force: true });
+      swept.push({ folder, ok: true });
+      return true;
+    } catch (error) {
+      swept.push({ folder, ok: false, error: String(error) });
+      return false;
+    }
+  };
+  let staged = [];
+  try {
+    staged = await promises.readdir(layout.worldStaging);
+  } catch {
+  }
+  for (const name of staged.sort()) {
+    await remove(node_path.join(layout.worldStaging, name), `.world-staging/${name}`);
+  }
+  const bases = new Set(worlds.map((world) => folderBaseOf(world.name)));
+  const removed = /* @__PURE__ */ new Set();
+  for (const folder of await savedFolders(layout.saves)) {
+    if (!isCopyName(folder, bases)) continue;
+    const path = node_path.join(layout.saves, folder);
+    if (await exists(node_path.join(path, "level.dat")) || await exists(node_path.join(path, "level.dat_old"))) {
+      continue;
+    }
+    if (await remove(path, folder)) removed.add(folder);
+  }
+  if (removed.size > 0) {
+    const known = await readMyWorlds(dataDir, packId);
+    const kept = known.filter((world) => !removed.has(world.folder));
+    if (kept.length !== known.length) await writeMyWorlds(dataDir, packId, kept);
+  }
+  return swept;
+}
+function isCopyName(folder, bases) {
+  if (bases.has(folder)) return true;
+  const numbered = /^(.+)_(\d+)$/.exec(folder);
+  return numbered?.[1] !== void 0 && bases.has(numbered[1]);
+}
 async function migrateMyWorlds(dataDir, packId, worlds, installed) {
   return serialized(dataDir, packId, () => recordEveryFolder(dataDir, packId, worlds, installed));
 }
@@ -17516,6 +18767,7 @@ async function recordEveryFolder(dataDir, packId, worlds, installed) {
   const ids = new Set(kept.map((world) => world.id));
   const added = [];
   for (const folder of folders) {
+    enableCheatsInLevelDat(node_path.join(layout.saves, folder, "level.dat"));
     if (recorded.has(folder)) continue;
     const id = uniqueId(ids, slugify(folder, "world"));
     ids.add(id);
@@ -17621,7 +18873,8 @@ async function describeMyWorlds(dataDir, packId, worlds, library) {
         played,
         ordinal: ordinals.get(world.id) ?? 1,
         hasPreview,
-        updateAvailable: hasNewer(world.source, library)
+        updateAvailable: hasNewer(world.source, library),
+        creative: world.gameMode === "creative"
       };
     })
   );
@@ -17674,6 +18927,139 @@ async function removeCopy(dataDir, packId, id) {
     worlds.filter((entry) => entry.id !== id)
   );
   return { ok: true, folder: world.folder };
+}
+const WORLD_ARCHIVE_MARKER = "kodland-world.json";
+const WORLD_ROOT = "world/";
+const WORLD_ARCHIVE_LIMITS = {
+  /** The zip file itself. */
+  fileMaxBytes: 1024 * 1024 * 1024,
+  /** Everything inside it, unpacked. */
+  unpackedMaxBytes: 2 * 1024 * 1024 * 1024,
+  entriesMax: 5e4
+};
+const markerSchema = object$1({
+  format: literal(1),
+  source: discriminatedUnion("kind", [
+    object$1({
+      kind: literal("manifest"),
+      worldId: string().min(1).max(200),
+      revision: number().int().nullable()
+    }),
+    object$1({
+      kind: literal("preset"),
+      worldId: string().min(1).max(200),
+      seed: string().regex(/^-?\d{1,20}$/)
+    })
+  ]),
+  /** What the child called it, or `""` for the lesson's own title. */
+  name: string().max(60),
+  exportedAt: string().max(40)
+});
+function leftOut(relativePath) {
+  const parts = relativePath.split("/");
+  const last = parts[parts.length - 1] ?? "";
+  return last === "session.lock" || parts.includes("__MACOSX") || last.startsWith("._") || last === ".DS_Store" || last.toLowerCase() === "thumbs.db";
+}
+async function filesUnder(root) {
+  const found = [];
+  async function walk(directory) {
+    for (const entry of await promises.readdir(directory, { withFileTypes: true })) {
+      const path = node_path.join(directory, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.isFile()) found.push(node_path.relative(root, path).split(node_path.sep).join("/"));
+    }
+  }
+  await walk(root);
+  return found;
+}
+async function packWorldArchive(worldDir, marker) {
+  const zip = new JSZip();
+  zip.file(WORLD_ARCHIVE_MARKER, `${JSON.stringify(markerSchema.parse(marker), null, 2)}
+`);
+  for (const path of await filesUnder(worldDir)) {
+    if (leftOut(path)) continue;
+    zip.file(`${WORLD_ROOT}${path}`, await promises.readFile(node_path.join(worldDir, path)));
+  }
+  return zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 }
+  });
+}
+function declaredSize(file) {
+  const size = file._data?.uncompressedSize;
+  return typeof size === "number" && size >= 0 ? size : 0;
+}
+async function openWorldArchive(bytes, limits2 = WORLD_ARCHIVE_LIMITS) {
+  let zip;
+  try {
+    zip = await JSZip.loadAsync(bytes);
+  } catch (error) {
+    return { ok: false, reason: "not-archive", detail: `not a zip: ${String(error)}` };
+  }
+  const markerFile = zip.file(WORLD_ARCHIVE_MARKER);
+  if (!markerFile) return { ok: false, reason: "not-archive", detail: "no marker" };
+  let marker;
+  try {
+    const parsed = markerSchema.safeParse(JSON.parse(await markerFile.async("string")));
+    if (!parsed.success)
+      return { ok: false, reason: "not-archive", detail: "the marker does not read" };
+    marker = parsed.data;
+  } catch {
+    return { ok: false, reason: "not-archive", detail: "the marker is not JSON" };
+  }
+  const entries = Object.values(zip.files).filter(
+    (file) => !file.dir && file.name.startsWith(WORLD_ROOT) && !leftOut(file.name)
+  );
+  if (entries.length > limits2.entriesMax) {
+    return { ok: false, reason: "too-large", detail: `${entries.length} files` };
+  }
+  let declared = 0;
+  for (const file of entries) {
+    const path = file.name.slice(WORLD_ROOT.length);
+    if (path === "" || !isSafeRelativePath(path)) {
+      return { ok: false, reason: "not-archive", detail: `unsafe path ${file.name}` };
+    }
+    declared += declaredSize(file);
+  }
+  if (declared > limits2.unpackedMaxBytes) {
+    return { ok: false, reason: "too-large", detail: `${declared} bytes unpacked` };
+  }
+  const level = zip.file(`${WORLD_ROOT}level.dat`);
+  if (!level) return { ok: false, reason: "not-archive", detail: "no level.dat" };
+  const settings = zip.file(`${WORLD_ROOT}${WORLD_GEN_SETTINGS_PATH.join("/")}`);
+  const seed = worldSeedOf({
+    levelDat: await level.async("uint8array"),
+    worldGenSettings: settings ? await settings.async("uint8array") : void 0
+  });
+  return {
+    ok: true,
+    archive: {
+      marker,
+      seed,
+      unpackedBytes: declared,
+      async extract(target) {
+        let written = 0;
+        for (const file of entries) {
+          const data = await file.async("nodebuffer");
+          written += data.length;
+          if (written > limits2.unpackedMaxBytes)
+            throw new Error("the world unpacks larger than it said");
+          const destination = node_path.join(target, file.name.slice(WORLD_ROOT.length));
+          await promises.mkdir(node_path.join(destination, ".."), { recursive: true });
+          await promises.writeFile(destination, data);
+        }
+      }
+    }
+  };
+}
+async function seedOfWorldFolder(worldDir) {
+  const read = (path) => promises.readFile(path).catch(() => void 0);
+  const [levelDat, worldGenSettings] = await Promise.all([
+    read(node_path.join(worldDir, "level.dat")),
+    read(node_path.join(worldDir, ...WORLD_GEN_SETTINGS_PATH))
+  ]);
+  return worldSeedOf({ levelDat, worldGenSettings });
 }
 const DEV_SSO_URL = "https://sso.dev.kodland.org";
 const SSO_TIMEOUT_MS = 1e4;
@@ -17977,6 +19363,7 @@ async function restoreSession(client, saved) {
   if (!rotated.ok) return { ok: false, failure: failureFor(rotated.error) };
   return identifyStudent(client, rotated.data);
 }
+const ERRORS$2 = errorsOf(ROUTES.profile);
 function asStringOrNull(value) {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
@@ -17985,16 +19372,18 @@ async function fetchLauncherProfile(options) {
   const doFetch = options.fetchImpl ?? fetch;
   let response;
   try {
-    response = await doFetch(`${base}/api/v1/launcher/profile`, {
+    response = await doFetch(routeUrl(base, ROUTES.profile), {
+      method: routeMethod(ROUTES.profile),
       headers: { Authorization: `Bearer ${options.accessToken}` },
       signal: AbortSignal.timeout(options.timeoutMs ?? 1e4)
     });
   } catch {
     return { ok: false, failure: "unavailable" };
   }
-  if (response.status === 401) return { ok: false, failure: "expired", status: 401 };
-  if (response.status === 403) return { ok: false, failure: "not_student", status: 403 };
-  if (response.status === 429) return { ok: false, failure: "unavailable", status: 429 };
+  const status = response.status;
+  if (status === ERRORS$2.UNAUTHORIZED) return { ok: false, failure: "expired", status };
+  if (status === ERRORS$2.NOT_STUDENT) return { ok: false, failure: "not_student", status };
+  if (status === ERRORS$2.RATE_LIMITED) return { ok: false, failure: "unavailable", status };
   if (!response.ok) return { ok: false, failure: "unavailable", status: response.status };
   let body;
   try {
@@ -18048,7 +19437,8 @@ async function fetchLauncherVersion(sparksUrl, options = {}) {
   const base = sparksUrl.replace(/\/+$/, "");
   let response;
   try {
-    response = await doFetch(`${base}/api/v1/launcher/version`, {
+    response = await doFetch(routeUrl(base, ROUTES.version), {
+      method: routeMethod(ROUTES.version),
       signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
       headers: { Accept: "application/json" }
     });
@@ -18104,6 +19494,143 @@ function isOlder(a, b) {
   const bPre = b.includes("-");
   return aPre && !bPre;
 }
+function percentOver(value, limit) {
+  return value > limit ? Math.ceil((value - limit) / limit * 100) : 0;
+}
+function codeOverSparks(code, type) {
+  const limits2 = PUBLISH_LIMITS.code(type);
+  const clean = code.split("\0").join("");
+  const byChars = percentOver(clean.length, limits2.codeMaxChars);
+  if (limits2.codeMaxLines === null || clean.length === 0) return byChars;
+  const byLines = percentOver(clean.split(/\r?\n/).length, limits2.codeMaxLines);
+  return Math.max(byChars, byLines);
+}
+async function publishLauncherProject(options) {
+  const picture = options.type === "DRAWING" || options.type === "MODEL3D";
+  if (options.type !== "DRAWING" && options.type !== "MODEL3D") {
+    const codeOver = codeOverSparks(options.code ?? "", options.type);
+    if (codeOver > 0) return { ok: false, failure: "too_large", overPercent: codeOver };
+  }
+  const base = options.sparksUrl.replace(/\/+$/, "");
+  const doFetch = options.fetchImpl ?? fetch;
+  const body = JSON.stringify({
+    type: options.type,
+    title: options.title,
+    description: options.description,
+    visibility: options.visibility,
+    ...picture ? {} : { code: options.code ?? "" },
+    ...options.coverPng === void 0 ? {} : { coverPng: options.coverPng },
+    ...picture && options.image !== void 0 ? { image: options.image } : {},
+    ...options.type === "MODEL3D" && options.cover !== void 0 ? { cover: options.cover } : {},
+    ...options.type === "MODEL3D" && options.modelTemplateId !== void 0 ? { modelTemplateId: options.modelTemplateId } : {},
+    ...options.publishId === void 0 ? {} : { publishId: options.publishId }
+  });
+  const bodyOver = percentOver(new TextEncoder().encode(body).length, PUBLISH_LIMITS.bodyMaxBytes);
+  if (bodyOver > 0) return { ok: false, failure: "too_large", overPercent: bodyOver };
+  let response;
+  try {
+    response = await doFetch(routeUrl(base, PUBLISH_ROUTE), {
+      method: routeMethod(PUBLISH_ROUTE),
+      headers: {
+        Authorization: `Bearer ${options.accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body,
+      signal: AbortSignal.timeout(options.timeoutMs ?? 1e4)
+    });
+  } catch {
+    return { ok: false, failure: "unavailable" };
+  }
+  const status = response.status;
+  if (!response.ok) {
+    const failure = failureOf$1(status);
+    if (failure === "rejected" && await codeTooLong(response)) {
+      return { ok: false, failure: "too_large", status };
+    }
+    return { ok: false, failure, status };
+  }
+  let parsed;
+  try {
+    parsed = await response.json();
+  } catch {
+    return { ok: false, failure: "unavailable", status };
+  }
+  return readAnswer(parsed, base) ?? { ok: false, failure: "unavailable", status };
+}
+async function updateLauncherSkin(options) {
+  const base = options.sparksUrl.replace(/\/+$/, "");
+  const doFetch = options.fetchImpl ?? fetch;
+  const body = JSON.stringify({
+    type: "MODEL3D",
+    image: options.image,
+    ...options.cover === void 0 ? {} : { cover: options.cover },
+    ...options.modelTemplateId === void 0 ? {} : { modelTemplateId: options.modelTemplateId },
+    ...options.title === void 0 ? {} : { title: options.title }
+  });
+  const bodyOver = percentOver(new TextEncoder().encode(body).length, PUBLISH_LIMITS.bodyMaxBytes);
+  if (bodyOver > 0) return { ok: false, failure: "too_large", overPercent: bodyOver };
+  let response;
+  try {
+    response = await doFetch(routeUrl(base, ROUTES.updateSkin, { id: options.projectId }), {
+      method: routeMethod(ROUTES.updateSkin),
+      headers: {
+        Authorization: `Bearer ${options.accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body,
+      signal: AbortSignal.timeout(options.timeoutMs ?? 1e4)
+    });
+  } catch {
+    return { ok: false, failure: "unavailable" };
+  }
+  const status = response.status;
+  if (status === SKIN_UPDATE_ERRORS.NOT_FOUND) return { ok: false, failure: "not_found", status };
+  if (!response.ok) return { ok: false, failure: failureOf$1(status), status };
+  let parsed;
+  try {
+    parsed = await response.json();
+  } catch {
+    return { ok: false, failure: "unavailable", status };
+  }
+  return readAnswer(parsed, base) ?? { ok: false, failure: "unavailable", status };
+}
+function readAnswer(body, base) {
+  if (typeof body !== "object" || body === null) return null;
+  const record2 = body;
+  const id = record2["id"];
+  const publicPath = record2["publicPath"];
+  if (typeof id !== "string" || id === "") return null;
+  if (typeof publicPath !== "string" || !publicPath.startsWith("/")) return null;
+  const crystals = record2["crystalsEarned"];
+  return {
+    ok: true,
+    id,
+    publicPath,
+    url: `${base}${publicPath}`,
+    crystalsEarned: typeof crystals === "number" && crystals > 0 ? crystals : 0
+  };
+}
+async function codeTooLong(response) {
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    return false;
+  }
+  if (typeof body !== "object" || body === null) return false;
+  const fieldErrors = body["fieldErrors"];
+  if (typeof fieldErrors !== "object" || fieldErrors === null) return false;
+  const code = fieldErrors["code"];
+  return Array.isArray(code) && code.some((word) => typeof word === "string" && CODE_TOO_LONG_KEYS.has(word));
+}
+function failureOf$1(status) {
+  if (status === PUBLISH_ERRORS.INVALID || status === PUBLISH_ERRORS.REJECTED) return "rejected";
+  if (status === PUBLISH_ERRORS.UNAUTHORIZED) return "expired";
+  if (status === PUBLISH_ERRORS.NOT_STUDENT) return "not_student";
+  if (status === PUBLISH_ERRORS.TOO_LARGE) return "too_large";
+  if (status === PUBLISH_ERRORS.RATE_LIMITED) return "rate_limited";
+  return "unavailable";
+}
 function sameOrigin(candidate, base) {
   try {
     const a = new URL(candidate);
@@ -18122,15 +19649,16 @@ function mayCarryLauncherCredential(url, sparksUrl) {
     return false;
   }
 }
+const ERRORS$1 = errorsOf(ROUTES.feed);
 function projectFileUrl(sparksUrl, projectId) {
   return `${sparksUrl.replace(/\/+$/, "")}/api/projects/${projectId}/file?variant=full`;
 }
-const PROJECT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const PROJECT_ID$1 = /^[A-Za-z0-9_-]{1,64}$/;
 function readProject(value, base) {
   if (typeof value !== "object" || value === null) return void 0;
   const row = value;
   const id = row["id"];
-  if (typeof id !== "string" || !PROJECT_ID.test(id)) return void 0;
+  if (typeof id !== "string" || !PROJECT_ID$1.test(id)) return void 0;
   const title = typeof row["title"] === "string" ? row["title"] : "";
   const ownerNickname = typeof row["ownerNickname"] === "string" ? row["ownerNickname"] : "";
   const createdAt = typeof row["createdAt"] === "string" ? row["createdAt"] : "";
@@ -18163,11 +19691,11 @@ async function readList(response, base) {
   const cursor = body["nextCursor"];
   return { ok: true, items: read, nextCursor: typeof cursor === "string" ? cursor : null };
 }
-function failureOf$1(status) {
-  if (status === 400) return "rejected";
-  if (status === 401) return "expired";
-  if (status === 403) return "not_student";
-  if (status === 429) return "rate_limited";
+function failureOf(status) {
+  if (status === ERRORS$1.INVALID) return "rejected";
+  if (status === ERRORS$1.UNAUTHORIZED) return "expired";
+  if (status === ERRORS$1.NOT_STUDENT) return "not_student";
+  if (status === ERRORS$1.RATE_LIMITED) return "rate_limited";
   return "unavailable";
 }
 async function refusalDetail(response) {
@@ -18180,16 +19708,17 @@ async function refusalDetail(response) {
     return void 0;
   }
 }
-async function get(path, options) {
+async function get(route, options) {
   const base = options.sparksUrl.replace(/\/+$/, "");
   const doFetch = options.fetchImpl ?? fetch;
-  const url = new URL(`${base}${path}`);
+  const url = new URL(routeUrl(base, route));
   if (options.type) url.searchParams.set("type", options.type);
   if (options.cursor) url.searchParams.set("cursor", options.cursor);
   if (options.limit) url.searchParams.set("limit", String(options.limit));
   let response;
   try {
     response = await doFetch(url.toString(), {
+      method: routeMethod(route),
       headers: { Authorization: `Bearer ${options.accessToken}` },
       signal: AbortSignal.timeout(options.timeoutMs ?? 1e4)
     });
@@ -18197,7 +19726,7 @@ async function get(path, options) {
     return { ok: false, failure: "unavailable" };
   }
   if (!response.ok) {
-    const failure = failureOf$1(response.status);
+    const failure = failureOf(response.status);
     if (failure !== "rejected") return { ok: false, failure };
     const detail = await refusalDetail(response);
     return { ok: false, failure, ...detail ? { detail } : {} };
@@ -18205,11 +19734,12 @@ async function get(path, options) {
   return readList(response, base);
 }
 function fetchLauncherFeed(options) {
-  return get("/api/v1/launcher/feed", options);
+  return get(ROUTES.feed, options);
 }
 function fetchLauncherProjects(options) {
-  return get("/api/v1/launcher/projects", options);
+  return get(ROUTES.ownProjects, options);
 }
+const ERRORS = errorsOf(ROUTES.session);
 function isInAppPath(next) {
   if (!next.startsWith("/")) return false;
   if (next.startsWith("//")) return false;
@@ -18221,8 +19751,8 @@ async function fetchLauncherSession(options) {
   const next = options.next !== void 0 && isInAppPath(options.next) ? options.next : void 0;
   let response;
   try {
-    response = await doFetch(`${base}/api/v1/launcher/session`, {
-      method: "POST",
+    response = await doFetch(routeUrl(base, ROUTES.session), {
+      method: routeMethod(ROUTES.session),
       headers: {
         Authorization: `Bearer ${options.accessToken}`,
         "Content-Type": "application/json"
@@ -18233,9 +19763,9 @@ async function fetchLauncherSession(options) {
   } catch {
     return { ok: false, failure: "unavailable" };
   }
-  if (response.status === 401) return { ok: false, failure: "expired" };
-  if (response.status === 403) return { ok: false, failure: "not_student" };
-  if (response.status === 429) return { ok: false, failure: "rate_limited" };
+  if (response.status === ERRORS.UNAUTHORIZED) return { ok: false, failure: "expired" };
+  if (response.status === ERRORS.NOT_STUDENT) return { ok: false, failure: "not_student" };
+  if (response.status === ERRORS.RATE_LIMITED) return { ok: false, failure: "rate_limited" };
   if (!response.ok) return { ok: false, failure: "unavailable" };
   let body;
   try {
@@ -18258,83 +19788,6 @@ async function fetchLauncherSession(options) {
     expiresAt: typeof expiresAt === "string" ? expiresAt : ""
   };
 }
-async function saveLauncherDraft(options) {
-  const base = options.sparksUrl.replace(/\/+$/, "");
-  const doFetch = options.fetchImpl ?? fetch;
-  let response;
-  try {
-    response = await doFetch(`${base}/api/v1/launcher/studio/draft`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${options.accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        // Only MODEL3D exists on their side today, and they refuse anything
-        // else. Sending the literal rather than a variable keeps it that way.
-        stack: "MODEL3D",
-        pixelDoc: options.pixelDoc,
-        ...options.modifiedFromProjectId === void 0 ? {} : { modifiedFromProjectId: options.modifiedFromProjectId }
-      }),
-      signal: AbortSignal.timeout(options.timeoutMs ?? 1e4)
-    });
-  } catch {
-    return { ok: false, failure: "unavailable" };
-  }
-  const status = response.status;
-  if (!response.ok) {
-    const body = await readErrorBody(response);
-    if (status === 403) {
-      return body.error === "FORBIDDEN_SOURCE" ? { ok: false, failure: "forbidden_source", status } : { ok: false, failure: "not_student", status };
-    }
-    const failure = failureOf(status);
-    return body.detail === void 0 ? { ok: false, failure, status } : { ok: false, failure, status, detail: body.detail };
-  }
-  let parsed;
-  try {
-    parsed = await response.json();
-  } catch {
-    return { ok: false, failure: "unavailable", status };
-  }
-  return readAnswer(parsed, base) ?? { ok: false, failure: "unavailable", status };
-}
-function readAnswer(body, base) {
-  if (typeof body !== "object" || body === null) return null;
-  const record2 = body;
-  const draftId = record2["draftId"];
-  const publishUrl = record2["publishUrl"];
-  if (typeof draftId !== "string" || draftId === "") return null;
-  if (typeof publishUrl !== "string" || !sameOrigin(publishUrl, base)) return null;
-  let parsedUrl;
-  try {
-    parsedUrl = new URL(publishUrl);
-  } catch {
-    return null;
-  }
-  return { ok: true, draftId, publishPath: `${parsedUrl.pathname}${parsedUrl.search}` };
-}
-function failureOf(status) {
-  if (status === 400) return "rejected";
-  if (status === 401) return "expired";
-  if (status === 413) return "too_large";
-  if (status === 429) return "rate_limited";
-  return "unavailable";
-}
-async function readErrorBody(response) {
-  try {
-    const body = await response.json();
-    if (typeof body !== "object" || body === null) return {};
-    const record2 = body;
-    const error = record2["error"];
-    const detail = record2["detail"];
-    return {
-      ...typeof error === "string" ? { error: error.slice(0, 64) } : {},
-      ...typeof detail === "string" ? { detail: detail.slice(0, 64) } : {}
-    };
-  } catch {
-    return {};
-  }
-}
 function parseStoredCredential(parsed) {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return void 0;
   const blob = parsed;
@@ -18354,6 +19807,7 @@ function parseStoredCredential(parsed) {
 function bearerOf(credential) {
   return credential.kind === "sso" ? credential.accessToken : credential.token;
 }
+const POLL_ERRORS = errorsOf(ROUTES.pairingPoll);
 function pairingPageUrl(sparksUrl) {
   return `${sparksUrl.replace(/\/+$/, "")}/launcher`;
 }
@@ -18365,8 +19819,8 @@ async function startPairing(options) {
   const base = options.sparksUrl.replace(/\/+$/, "");
   const doFetch = options.fetchImpl ?? fetch;
   try {
-    const response = await doFetch(`${base}/api/v1/launcher/pairing`, {
-      method: "POST",
+    const response = await doFetch(routeUrl(base, ROUTES.pairing), {
+      method: routeMethod(ROUTES.pairing),
       signal: AbortSignal.timeout(options.timeoutMs ?? 1e4)
     });
     if (!response.ok) return { ok: false, status: response.status };
@@ -18387,15 +19841,15 @@ async function pollPairing(options) {
   const base = options.sparksUrl.replace(/\/+$/, "");
   const doFetch = options.fetchImpl ?? fetch;
   try {
-    const response = await doFetch(`${base}/api/v1/launcher/pairing/poll`, {
-      method: "POST",
+    const response = await doFetch(routeUrl(base, ROUTES.pairingPoll), {
+      method: routeMethod(ROUTES.pairingPoll),
       headers: { "Content-Type": "application/json" },
       // POST, and the secret in the body: a GET would put a credential in a query
       // string, where it is written into access logs.
       body: JSON.stringify({ pollSecret: options.pollSecret, label: options.label }),
       signal: AbortSignal.timeout(options.timeoutMs ?? 1e4)
     });
-    if (response.status === 429) return { status: "unreachable" };
+    if (response.status === POLL_ERRORS.RATE_LIMITED) return { status: "unreachable" };
     if (!response.ok) return { status: "unreachable" };
     const body = await response.json();
     const status = body["status"];
@@ -18436,6 +19890,9 @@ async function readSettings(dataDir) {
       ...isUnlockedWorlds(record2["pendingUnlockedWorlds"]) ? { pendingUnlockedWorlds: record2["pendingUnlockedWorlds"] } : {},
       ...isUnlockedWorlds(record2["seenOpenWorlds"]) ? { seenOpenWorlds: record2["seenOpenWorlds"] } : {},
       ...isUnlockedWorlds(record2["grantedStudios"]) ? { grantedStudios: record2["grantedStudios"] } : {},
+      ...typeof record2["teacherCode"] === "string" ? { teacherCode: record2["teacherCode"] } : {},
+      ...typeof record2["teacherName"] === "string" ? { teacherName: record2["teacherName"] } : {},
+      ...record2["isStaff"] === true ? { isStaff: true } : {},
       ...record2["windowedDefaultApplied"] === true ? { windowedDefaultApplied: true } : {}
     };
   } catch {
@@ -18446,7 +19903,6 @@ async function updateSettings(dataDir, patch) {
   return serial(() => writeMerged(dataDir, patch));
 }
 let settingsQueue = Promise.resolve();
-let tempCounter = 0;
 function serial(task) {
   const run2 = settingsQueue.then(task, task);
   settingsQueue = run2.catch(() => {
@@ -18457,10 +19913,8 @@ async function writeMerged(dataDir, patch) {
   const current = await readSettings(dataDir);
   const next = { ...current, ...patch };
   await promises.mkdir(node_path.dirname(settingsPath(dataDir)), { recursive: true });
-  const temporary = `${settingsPath(dataDir)}.${process.pid}-${(tempCounter++).toString(36)}.part`;
-  await promises.writeFile(temporary, `${JSON.stringify(next, null, 2)}
+  await writeFileAtomic(settingsPath(dataDir), `${JSON.stringify(next, null, 2)}
 `);
-  await promises.rename(temporary, settingsPath(dataDir));
   return next;
 }
 function unlockedWorldsFor(settings, packId) {
@@ -18591,7 +20045,7 @@ function createAuthService(options) {
     stopPairing();
     session = { identity, isStaff, credential };
     await tokens.write(credential);
-    await updateSettings(options.dataDir, { lastNickname: identity.login });
+    await updateSettings(options.dataDir, { lastNickname: identity.login, isStaff: isStaff === true });
     log(
       `signed in as ${identity.login} (${isStaff ? "staff" : "student"}, Minecraft nickname ${identity.nickname})`
     );
@@ -18792,27 +20246,34 @@ function createAuthService(options) {
       publish(void 0);
     },
     /**
-     * Hand a drawing to Sparks so the child can publish it there.
+     * Publish a project straight to a card, with no browser hop.
      *
      * A capability, exactly like `sparksSession`: the credential stays in this
-     * file and the caller gets an answer. `publish-service` opens browsers and
-     * writes to the shelf, and has no business being able to read a session.
+     * file and the caller gets an answer. Every Studio publishes through it - a
+     * script, a data pack, a picture and a skin - so the title, description and
+     * visibility are collected in the launcher and travel in this one call.
      *
-     * **Nothing is cleared here, on any answer, including 401** - the same rule
-     * and the same reason as `sparksSession`. For a `klt_` a 401 does mean
-     * revoked, and `restore()` already acts on that at the next start, which is
-     * where that rule lives. A second copy of it here would be a second place
-     * for it to drift.
+     * Nothing is cleared here on any answer, including 401 - the same rule and
+     * the same reason as `sparksSession`: `restore()` acts on a revoked `klt_`
+     * at the next start, and a second copy of that rule is a second place to drift.
      */
-    async sparksSkinDraft(pixelDoc, modifiedFromProjectId) {
+    async sparksCreateProject(input) {
       const current = session;
       if (!current) return { ok: false, failure: "expired" };
-      return saveLauncherDraft({
+      return publishLauncherProject({
         sparksUrl,
         accessToken: bearerOf(current.credential),
-        pixelDoc,
-        ...modifiedFromProjectId === void 0 ? {} : { modifiedFromProjectId }
+        ...input
       });
+    },
+    /**
+     * A new picture for one of the child's own skin cards. The same capability
+     * rule as `sparksCreateProject`, and the same rule about a 401.
+     */
+    async sparksUpdateSkin(input) {
+      const current = session;
+      if (!current) return { ok: false, failure: "expired" };
+      return updateLauncherSkin({ sparksUrl, accessToken: bearerOf(current.credential), ...input });
     },
     /**
      * A one-minute url that signs Sparks' embedded pages in as this person.
@@ -18960,6 +20421,9 @@ function createAuthService(options) {
     currentIdentity() {
       return session?.identity;
     },
+    isStaff() {
+      return session?.isStaff === true;
+    },
     /**
      * May the person signed in here change the course pack?
      *
@@ -19030,6 +20494,11 @@ function dataDirLayout(root, platform = process.platform) {
     /** Non-secret settings. SSO tokens live in the OS keychain (T7), never here. */
     settings: at("launcher.json")
   };
+}
+function publishLogLine(kind, facts) {
+  if (facts.ok) return `published a ${kind}: project ${facts.id}`;
+  const status = facts.status === void 0 ? "" : ` (status ${facts.status})`;
+  return `could not publish a ${kind}: ${facts.reason}${status}`;
 }
 function createDatapackService(options) {
   const log = options.log ?? (() => {
@@ -19105,13 +20574,66 @@ function createDatapackService(options) {
             // and a warning would be two answers to one question.
             preview: doc2 ? previewOf$1(doc2) : { kind: "empty" },
             problems: doc2 ? checkDatapack(doc2, checklist) : [{ reason: "bad-json" }],
-            refusals: refusals.get(entry.slug) ?? []
+            refusals: refusals.get(entry.slug) ?? [],
+            ...entry.publishedUrl === void 0 ? {} : { publishedUrl: entry.publishedUrl }
           };
         })
       );
     },
     async doc(slug) {
       return readDraft(options.dataDir, slug);
+    },
+    /**
+     * Publish the saved pack as a card on Sparks, with no browser.
+     *
+     * Sends the serialised document (what is on disk, the one source of truth)
+     * as the project's `code`, plus a cover the renderer drew. There is no web
+     * editor for a pack, so the title, description and audience come from the
+     * launcher's own publish form, inside `meta`.
+     */
+    async publish(slug, meta, coverPng) {
+      const stop = (outcome, status) => {
+        log(publishLogLine("data pack", { ok: false, reason: outcome.reason, status }));
+        return outcome;
+      };
+      const text = await readDraft(options.dataDir, slug);
+      if (text === void 0 || text.trim().length === 0) {
+        return stop({ ok: false, reason: "empty" });
+      }
+      let code;
+      try {
+        code = JSON.stringify(parseDatapackDoc(text));
+      } catch {
+        return stop({ ok: false, reason: "rejected" });
+      }
+      const over = codeOverSparks(code, "DATAPACK");
+      if (over > 0) return stop({ ok: false, reason: "too_large", overPercent: over });
+      if (!options.publishProject) return stop({ ok: false, reason: "expired" });
+      const result = await options.publishProject({
+        type: "DATAPACK",
+        title: meta.title,
+        description: meta.description,
+        visibility: meta.visibility,
+        code,
+        coverPng,
+        ...meta.publishId === void 0 ? {} : { publishId: meta.publishId }
+      });
+      if (result.ok) {
+        log(publishLogLine("data pack", { ok: true, id: result.id }));
+        await setDraftPublished(options.dataDir, slug, result.url).catch(() => {
+        });
+        options.onDraftsChanged();
+        return {
+          ok: true,
+          publicPath: result.publicPath,
+          url: result.url,
+          crystalsEarned: result.crystalsEarned
+        };
+      }
+      return stop(
+        result.overPercent === void 0 ? { ok: false, reason: result.failure } : { ok: false, reason: result.failure, overPercent: result.overPercent },
+        result.status
+      );
     },
     /**
      * Make a pack from a preset.
@@ -19129,7 +20651,14 @@ function createDatapackService(options) {
         itemTitle: text["itemTitle"] ?? name,
         ...text["chatLine"] === void 0 ? {} : { chatLine: text["chatLine"] }
       }) : createEmptyDoc(name);
-      const entry = await createDraft(options.dataDir, name, doc2);
+      let entry;
+      try {
+        entry = await createDraft(options.dataDir, name, doc2);
+      } catch (error) {
+        log(`could not make data pack "${name}": ${String(error)}`);
+        options.onDatapack({ status: "failed", reason: "save-failed" });
+        return void 0;
+      }
       log(`made data pack "${name}" as ${entry.slug} from preset ${preset ?? "empty"}`);
       options.onDraftsChanged();
       return entry.slug;
@@ -19148,21 +20677,39 @@ function createDatapackService(options) {
       } catch {
         log("refused to save a data pack draft that is not a document");
         options.onDatapack({ status: "failed", reason: "bad-json" });
-        return;
+        return { ok: false, reason: "bad-json" };
       }
-      if (!await saveDraft(options.dataDir, slug, doc2)) {
+      let found;
+      try {
+        found = await saveDraft(options.dataDir, slug, doc2);
+      } catch (error) {
+        log(`could not save data pack ${slug}: ${String(error)}`);
+        options.onDatapack({ status: "failed", reason: "save-failed" });
+        return { ok: false, reason: "unavailable" };
+      }
+      if (!found) {
         options.onDatapack({ status: "failed", reason: "gone" });
-        return;
+        return { ok: false, reason: "gone" };
       }
       options.onDatapack({ status: "saved" });
       options.onDraftsChanged();
+      return { ok: true };
     },
     async rename(slug, name) {
-      if (await renameDraft(options.dataDir, slug, name)) options.onDraftsChanged();
+      try {
+        if (await renameDraft(options.dataDir, slug, name)) options.onDraftsChanged();
+      } catch (error) {
+        log(`could not rename data pack ${slug}: ${String(error)}`);
+        options.onDatapack({ status: "failed", reason: "save-failed" });
+      }
     },
     async remove(slug) {
       const packId = options.packId();
-      await removeDraft(options.dataDir, slug, packId);
+      try {
+        await removeDraft(options.dataDir, slug, packId);
+      } catch (error) {
+        log(`removed data pack ${slug}, but not its index entry: ${String(error)}`);
+      }
       refusals.delete(slug);
       log(`removed data pack ${slug}`);
       options.onDraftsChanged();
@@ -19178,7 +20725,15 @@ function createDatapackService(options) {
      */
     async want(slug, wanted) {
       options.onDatapack({ status: "working", action: wanted ? "turning-on" : "turning-off" });
-      if (!await setDraftWanted(options.dataDir, slug, wanted)) {
+      let found;
+      try {
+        found = await setDraftWanted(options.dataDir, slug, wanted);
+      } catch (error) {
+        log(`could not switch data pack ${slug}: ${String(error)}`);
+        options.onDatapack({ status: "failed", reason: "save-failed" });
+        return;
+      }
+      if (!found) {
         options.onDatapack({ status: "failed", reason: "gone" });
         return;
       }
@@ -19279,7 +20834,8 @@ function createPythonService(options) {
       // card still has to draw, and `problems` already says what is wrong.
       lines: text === void 0 ? 0 : text.split("\n").length,
       preview: text === void 0 ? "" : previewOf(text),
-      problems: text === void 0 ? [] : checkScript(text)
+      problems: text === void 0 ? [] : checkScript(text),
+      ...entry.publishedUrl === void 0 ? {} : { publishedUrl: entry.publishedUrl }
     };
   };
   async function copyIntoGame(slug, text) {
@@ -19318,7 +20874,14 @@ function createPythonService(options) {
       const taken = (await listScripts(options.dataDir)).map((entry2) => entry2.slug);
       const wanted = presetSlug(preset);
       const slug = await scriptSlugIsFree(options.dataDir, wanted) ? wanted : scriptSlugify(wanted, taken);
-      const entry = await createScript(options.dataDir, slug, name, source);
+      let entry;
+      try {
+        entry = await createScript(options.dataDir, slug, name, source);
+      } catch (error) {
+        log(`could not make a script called "${name}": ${String(error)}`);
+        options.onPython({ status: "failed", reason: "save-failed" });
+        return void 0;
+      }
       if (!entry) {
         log(`could not make a script called "${name}"`);
         options.onPython({ status: "failed", reason: "gone" });
@@ -19341,21 +20904,29 @@ function createPythonService(options) {
     async save(slug, text) {
       if (text.length > MAX_SCRIPT_CHARS) {
         options.onPython({ status: "failed", reason: "too-big" });
-        return;
+        return { ok: false, reason: "too-big" };
       }
       if (checkScript(text).some((problem) => problem.reason === "bad-characters")) {
         options.onPython({ status: "failed", reason: "bad-characters" });
-        return;
+        return { ok: false, reason: "bad-characters" };
       }
-      if (!await saveScript(options.dataDir, slug, text)) {
+      let found;
+      try {
+        found = await saveScript(options.dataDir, slug, text);
+      } catch (error) {
+        log(`could not save script ${slug}: ${String(error)}`);
+        options.onPython({ status: "failed", reason: "save-failed" });
+        return { ok: false, reason: "unavailable" };
+      }
+      if (!found) {
         options.onPython({ status: "failed", reason: "gone" });
-        return;
+        return { ok: false, reason: "gone" };
       }
       const entry = (await listScripts(options.dataDir)).find((one) => one.slug === slug);
       if (entry?.wanted !== true) {
         options.onPython({ status: "saved", inGame: false });
         options.onScriptsChanged();
-        return;
+        return { ok: true };
       }
       const inGame = await copyIntoGame(slug, text);
       options.onPython(
@@ -19366,6 +20937,7 @@ function createPythonService(options) {
         )
       );
       options.onScriptsChanged();
+      return { ok: true };
     },
     /**
      * Rename a script, and move its copy in the game with it.
@@ -19382,7 +20954,14 @@ function createPythonService(options) {
      * or launch repairs the copy.
      */
     async rename(slug, next) {
-      const result = await renameScript(options.dataDir, slug, next);
+      let result;
+      try {
+        result = await renameScript(options.dataDir, slug, next);
+      } catch (error) {
+        log(`could not rename script ${slug}: ${String(error)}`);
+        options.onPython({ status: "failed", reason: "save-failed" });
+        return { ok: false, reason: "missing" };
+      }
       if (!result.ok) return result;
       const packId = options.packId();
       if (packId) {
@@ -19398,10 +20977,59 @@ function createPythonService(options) {
       options.onScriptsChanged();
       return result;
     },
+    /**
+     * Publish the saved script as a card on Sparks, with no browser.
+     *
+     * Reads the file rather than taking text from the renderer: the card must
+     * carry what the child saved, and the file on disk is the one source of
+     * truth. An empty or unreadable script is refused here, before a token is
+     * spent, with the same word the screen would show anyway.
+     */
+    async publish(slug, meta) {
+      const stop = (outcome, status) => {
+        log(publishLogLine("script", { ok: false, reason: outcome.reason, status }));
+        return outcome;
+      };
+      const text = await readScript(options.dataDir, slug);
+      if (text === void 0 || text.trim().length === 0) {
+        return stop({ ok: false, reason: "empty" });
+      }
+      const over = codeOverSparks(text, "PYTHON");
+      if (over > 0) return stop({ ok: false, reason: "too_large", overPercent: over });
+      if (!options.publishProject) return stop({ ok: false, reason: "expired" });
+      const result = await options.publishProject({
+        type: "PYTHON",
+        title: meta.title,
+        description: meta.description,
+        visibility: meta.visibility,
+        code: text,
+        ...meta.publishId === void 0 ? {} : { publishId: meta.publishId }
+      });
+      if (result.ok) {
+        log(publishLogLine("script", { ok: true, id: result.id }));
+        await setScriptPublished(options.dataDir, slug, result.url).catch(() => {
+        });
+        options.onScriptsChanged();
+        return {
+          ok: true,
+          publicPath: result.publicPath,
+          url: result.url,
+          crystalsEarned: result.crystalsEarned
+        };
+      }
+      return stop(
+        result.overPercent === void 0 ? { ok: false, reason: result.failure } : { ok: false, reason: result.failure, overPercent: result.overPercent },
+        result.status
+      );
+    },
     async remove(slug) {
       const packId = options.packId();
       if (packId) await removeAppliedScript(options.dataDir, packId, slug);
-      await removeScript(options.dataDir, slug);
+      try {
+        await removeScript(options.dataDir, slug);
+      } catch (error) {
+        log(`removed script ${slug}, but not its index entry: ${String(error)}`);
+      }
       log(`removed script ${slug}`);
       options.onScriptsChanged();
     },
@@ -19414,7 +21042,15 @@ function createPythonService(options) {
      */
     async want(slug, wanted) {
       options.onPython({ status: "working", action: wanted ? "turning-on" : "turning-off" });
-      if (!await setScriptWanted(options.dataDir, slug, wanted)) {
+      let found;
+      try {
+        found = await setScriptWanted(options.dataDir, slug, wanted);
+      } catch (error) {
+        log(`could not switch script ${slug}: ${String(error)}`);
+        options.onPython({ status: "failed", reason: "save-failed" });
+        return;
+      }
+      if (!found) {
         options.onPython({ status: "failed", reason: "gone" });
         return;
       }
@@ -19461,6 +21097,225 @@ function createPythonService(options) {
       }
     }
   };
+}
+function createAlbumsService(options) {
+  let running = Promise.resolve(0);
+  const reported = /* @__PURE__ */ new Set();
+  function ingest(reason) {
+    running = running.then(async () => {
+      const inboxes = options.inboxes();
+      if (inboxes.length === 0) return 0;
+      try {
+        const outcome = await ingestPhotos(options.dataDir, inboxes, {
+          ...options.makeThumb ? { makeThumb: options.makeThumb } : {}
+        });
+        for (const skip of outcome.skipped) {
+          const key = `${skip.file}:${skip.reason}`;
+          if (reported.has(key)) continue;
+          reported.add(key);
+          options.log(`albums: left ${skip.file} in the inbox - ${skip.reason}`);
+        }
+        if (outcome.added.length > 0) {
+          options.log(`albums: took ${outcome.added.length} photo(s) in (${reason})`);
+        }
+        return outcome.added.length;
+      } catch (error) {
+        options.log(`albums: could not take photos in (${reason}): ${String(error)}`);
+        return 0;
+      }
+    });
+    return running;
+  }
+  function publishStop(kind, outcome, status) {
+    options.log(publishLogLine(kind, { ok: false, reason: outcome.reason, status }));
+    return outcome;
+  }
+  async function publish(kind, jpeg, meta) {
+    if (!options.publishProject) return publishStop(kind, { ok: false, reason: "expired" });
+    const result = await options.publishProject({
+      type: "DRAWING",
+      title: meta.title,
+      description: meta.description,
+      visibility: meta.visibility,
+      image: `data:image/jpeg;base64,${Buffer.from(jpeg).toString("base64")}`,
+      ...meta.publishId === void 0 ? {} : { publishId: meta.publishId }
+    });
+    if (!result.ok) {
+      return publishStop(
+        kind,
+        result.overPercent === void 0 ? { ok: false, reason: result.failure } : { ok: false, reason: result.failure, overPercent: result.overPercent },
+        result.status
+      );
+    }
+    options.log(publishLogLine(kind, { ok: true, id: result.id }));
+    return {
+      ok: true,
+      publicPath: result.publicPath,
+      url: result.url,
+      crystalsEarned: result.crystalsEarned
+    };
+  }
+  return {
+    /** Take in what is waiting, and say so if anything arrived. */
+    async ingest(reason) {
+      if (await ingest(reason) > 0) options.onPhotosChanged();
+    },
+    async photos() {
+      await ingest("the list was read");
+      return (await listPhotos(options.dataDir)).map(toView);
+    },
+    async setCaption(id, caption) {
+      if (!isPhotoId(id) || typeof caption !== "string") return void 0;
+      return setPhotoCaption(options.dataDir, id, caption);
+    },
+    async remove(id) {
+      if (!isPhotoId(id)) return;
+      if (await removePhoto(options.dataDir, id)) {
+        await forgetPhotoInAlbums(options.dataDir, id);
+        await forgetPhotoInCollections(options.dataDir, id);
+        options.log(`albums: removed ${id}`);
+        options.onPhotosChanged();
+      }
+    },
+    async publishPhoto(id, meta) {
+      if (!isPhotoId(id)) return publishStop("photo", { ok: false, reason: "empty" });
+      const fitted = await options.fitPicture?.({ path: photoFile(options.dataDir, id, "png") });
+      if (typeof fitted !== "object") {
+        return publishStop("photo", { ok: false, reason: fitted ?? "unreadable" });
+      }
+      const outcome = await publish("photo", fitted, meta);
+      if (outcome.ok) {
+        await setPhotoPublished(options.dataDir, id, outcome.url).catch(() => {
+        });
+        options.onPhotosChanged();
+      }
+      return outcome;
+    },
+    async publishAlbum(id, meta, png) {
+      const bytes = pngBytesOf(png);
+      if (!isAlbumId(id) || !bytes) return publishStop("album", { ok: false, reason: "empty" });
+      const fitted = await options.fitPicture?.({ png: bytes });
+      if (typeof fitted !== "object") {
+        return publishStop("album", { ok: false, reason: fitted ?? "unreadable" });
+      }
+      const outcome = await publish("album", fitted, meta);
+      if (outcome.ok) await setAlbumPublished(options.dataDir, id, outcome.url).catch(() => {
+      });
+      return outcome;
+    },
+    async photoData(id, maxSide) {
+      if (!isPhotoId(id) || typeof maxSide !== "number" || !Number.isFinite(maxSide))
+        return void 0;
+      const side = Math.min(1600, Math.max(64, Math.round(maxSide)));
+      return options.photoData?.(photoFile(options.dataDir, id, "png"), side);
+    },
+    albums() {
+      return listAlbums(options.dataDir);
+    },
+    async album(id) {
+      return isAlbumId(id) ? readAlbum(options.dataDir, id) : void 0;
+    },
+    async createAlbum(title, pages) {
+      if (typeof title !== "string") return void 0;
+      const created = await createAlbum(
+        options.dataDir,
+        title,
+        Array.isArray(pages) ? pages : void 0
+      );
+      if (created) options.log(`albums: album ${created.id} created`);
+      return created;
+    },
+    async saveAlbum(album) {
+      const saved = await saveAlbum(options.dataDir, album);
+      if (!saved) options.log("albums: refused an album save that did not match the album shape");
+      return saved;
+    },
+    collections() {
+      return listCollections(options.dataDir);
+    },
+    async createCollection(title, photoIds) {
+      if (typeof title !== "string") return void 0;
+      const ids = Array.isArray(photoIds) ? photoIds.filter(isPhotoId) : [];
+      return createCollection(options.dataDir, title, ids);
+    },
+    saveCollection(collection) {
+      return saveCollection(options.dataDir, collection);
+    },
+    async removeCollection(id) {
+      if (isCollectionId(id)) await removeCollection(options.dataDir, id);
+    },
+    async removeAlbum(id) {
+      if (isAlbumId(id) && await removeAlbum(options.dataDir, id)) {
+        options.log(`albums: album ${id} removed`);
+      }
+    }
+  };
+}
+function toView(entry) {
+  return {
+    id: entry.id,
+    day: entry.day,
+    takenAt: entry.takenAt,
+    width: entry.width,
+    height: entry.height,
+    caption: entry.caption,
+    ...entry.world === void 0 ? {} : { world: entry.world },
+    ...entry.dimension === void 0 ? {} : { dimension: entry.dimension },
+    ...entry.biome === void 0 ? {} : { biome: entry.biome },
+    ...entry.publishedUrl === void 0 ? {} : { publishedUrl: entry.publishedUrl }
+  };
+}
+function pngBytesOf(value) {
+  if (typeof value !== "string") return void 0;
+  const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(value);
+  if (!match?.[1]) return void 0;
+  const bytes = new Uint8Array(Buffer.from(match[1], "base64"));
+  return bytes.length > 8 && bytes[0] === 137 && bytes[1] === 80 ? bytes : void 0;
+}
+const QUALITIES = [90, 82, 74, 66, 60];
+const SHRINK = 0.82;
+const MIN_LONG_SIDE = 640;
+function fitUnder(budget, longSide, encode2) {
+  for (let scale = 1; longSide * scale >= MIN_LONG_SIDE || scale === 1; scale *= SHRINK) {
+    for (const quality of QUALITIES) {
+      const bytes = encode2(scale, quality);
+      if (bytes.length <= budget) return { bytes, scale, quality };
+    }
+  }
+  return void 0;
+}
+function imageBudget(bodyMaxBytes, jsonOverhead = 4096) {
+  return Math.floor((bodyMaxBytes - jsonOverhead) * 3 / 4);
+}
+function readPublishMeta(meta) {
+  if (typeof meta !== "object" || meta === null) return void 0;
+  const record2 = meta;
+  const title = typeof record2["title"] === "string" ? record2["title"].trim() : "";
+  const description = typeof record2["description"] === "string" ? record2["description"] : "";
+  const visibility = record2["visibility"];
+  if (title === "" || title.length > PUBLISH_LIMITS.titleMaxChars) return void 0;
+  if (description.length > PUBLISH_LIMITS.descriptionMaxChars) return void 0;
+  if (visibility !== "PUBLIC" && visibility !== "FRIENDS_ONLY" && visibility !== "PRIVATE") {
+    return void 0;
+  }
+  const publishId = record2["publishId"];
+  return typeof publishId === "string" && UUID.test(publishId) ? { title, description, visibility, publishId } : { title, description, visibility };
+}
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function isSparksPageUrl(url, sparksUrl) {
+  if (typeof url !== "string") return false;
+  let page;
+  let base;
+  try {
+    page = new URL(url);
+    base = new URL(sparksUrl);
+  } catch {
+    return false;
+  }
+  if (page.protocol !== "https:" && page.protocol !== "http:") return false;
+  if (page.username !== "" || page.password !== "") return false;
+  if (page.origin !== base.origin) return false;
+  return page.pathname.length > 1;
 }
 function base64ToBytes(base642) {
   const binary = atob(base642);
@@ -19624,7 +21479,7 @@ function createEditorService(options) {
   async function rememberDraftRow(id) {
     try {
       await promises.mkdir(options.dataDir, { recursive: true });
-      await promises.writeFile(rowPath, JSON.stringify({ id }), "utf8");
+      await writeFileAtomic(rowPath, JSON.stringify({ id }));
     } catch {
       log("could not remember which shelf row this drawing made");
     }
@@ -19671,9 +21526,7 @@ function createEditorService(options) {
         return;
       }
       await promises.mkdir(options.dataDir, { recursive: true });
-      const temporary = `${path}.${process.pid}.part`;
-      await promises.writeFile(temporary, json2, "utf8");
-      await promises.rename(temporary, path);
+      await writeFileAtomic(path, json2);
     },
     /**
      * Put the drawing on the character, and keep a copy.
@@ -19704,6 +21557,7 @@ function createEditorService(options) {
         return;
       }
       const added = await addToLibrary(options.dataDir, png, "");
+      if (added) await markLibraryOwn(options.dataDir, added.entry.id);
       options.onLibraryChanged();
       const previousId = added ? await supersededRow(added.entry.id) : void 0;
       if (added) await rememberDraftRow(added.entry.id);
@@ -19719,166 +21573,177 @@ function createEditorService(options) {
         afterRestart,
         ...previousId ? { previousId } : {}
       });
+    },
+    /**
+     * Put the drawing on the shelf without wearing it.
+     *
+     * Before another skin is opened in the Studio: there is one drawing, and
+     * the one being replaced must not exist nowhere. An empty canvas is not
+     * kept - it is not a skin, and a blank tile is not something a child made.
+     * Idempotent by content, so a drawing already worn is the row it made.
+     */
+    async keep(png) {
+      if (opaquePixelCount(png) === 0) return;
+      const added = await addToLibrary(options.dataDir, png, "");
+      if (!added) return;
+      await markLibraryOwn(options.dataDir, added.entry.id);
+      if (!added.alreadyThere) {
+        log(`kept the drawing on the shelf as ${added.entry.id} before opening another skin`);
+        options.onLibraryChanged();
+      }
+    },
+    /**
+     * Make `json` the drawing, opened from the shelf row `rowId`.
+     *
+     * The row becomes "the one this drawing last made", so wearing the changed
+     * skin asks whether to replace the version it came from - the same question
+     * a second Wear asks - instead of quietly leaving both.
+     */
+    async start(json2, rowId) {
+      if (!parseSkinDoc(json2)) {
+        log("refused to open something that is not a skin document");
+        return false;
+      }
+      await promises.mkdir(options.dataDir, { recursive: true });
+      await writeFileAtomic(path, json2);
+      await rememberDraftRow(rowId);
+      return true;
     }
   };
 }
-const FILE$1 = "skin-publish.json";
-const PENDING_STALE_MS = 7 * 24 * 60 * 60 * 1e3;
+const CARD_FILE = "skin-draft-card.json";
 function createPublishService(options) {
   const log = options.log ?? (() => {
   });
-  const path = node_path.join(options.dataDir, FILE$1);
-  let busy = false;
-  async function readLink() {
+  const cardPath = node_path.join(options.dataDir, CARD_FILE);
+  async function card() {
+    let parsed;
     try {
-      const parsed = JSON.parse(await promises.readFile(path, "utf8"));
-      if (typeof parsed !== "object" || parsed === null) return {};
-      return parsed;
+      parsed = JSON.parse(await promises.readFile(cardPath, "utf8"));
     } catch {
-      return {};
+      return void 0;
     }
+    if (typeof parsed.projectId !== "string" || parsed.projectId === "") return void 0;
+    const who = options.owner();
+    if (who === void 0 || parsed.owner !== who) return void 0;
+    return {
+      projectId: parsed.projectId,
+      title: typeof parsed.title === "string" ? parsed.title : "",
+      owner: who
+    };
   }
-  async function writeLink(link) {
-    await promises.mkdir(options.dataDir, { recursive: true });
-    const temporary = `${path}.${process.pid}.part`;
-    await promises.writeFile(temporary, `${JSON.stringify(link, null, 2)}
-`, "utf8");
-    await promises.rename(temporary, path);
-  }
-  async function publish(doc2, png) {
-    if (busy) {
-      options.onSkin({ status: "failed", reason: "publish-busy" });
-      return;
-    }
-    if (!parseSkinDoc(doc2)) {
-      log("refused to publish something that is not a skin document");
-      options.onSkin({ status: "failed", reason: "publish" });
-      return;
-    }
-    if (opaquePixelCount(png) === 0) {
-      options.onSkin({ status: "rejected", reason: "empty" });
-      return;
-    }
-    busy = true;
-    options.onSkin({ status: "working", action: "publishing" });
+  async function setCard(next) {
     try {
-      await doPublish(doc2, png);
-    } finally {
-      busy = false;
+      await promises.mkdir(options.dataDir, { recursive: true });
+      await writeFileAtomic(cardPath, JSON.stringify(next ?? {}));
+    } catch {
+      log("could not remember which card the skin drawing is");
     }
   }
-  async function doPublish(doc2, png) {
+  function stop(outcome, status) {
+    log(publishLogLine("skin", { ok: false, reason: outcome.reason, status }));
+    return outcome;
+  }
+  function cardGone(status) {
+    log(publishLogLine("skin update", { ok: false, reason: "card_gone", status }));
+    return { ok: false, reason: "card_gone" };
+  }
+  async function publish(doc2, png, cover, meta, mode = "new") {
+    const parsed = parseSkinDoc(doc2);
+    if (!parsed) return stop({ ok: false, reason: "rejected" });
+    if (opaquePixelCount(png) === 0) return stop({ ok: false, reason: "empty" });
+    if (!options.publishProject) return stop({ ok: false, reason: "expired" });
     await options.saveDraft(doc2);
-    const link = await readLink();
-    let updating = link.projectId;
-    let saved = await options.saveToSparks(doc2, updating);
-    if (!saved.ok && saved.failure === "forbidden_source" && updating !== void 0) {
-      log("the project this skin updated is gone; publishing it as a new one");
-      updating = void 0;
-      await writeLink({});
-      saved = await options.saveToSparks(doc2);
-    }
-    if (!saved.ok) {
-      log(`could not send the skin to Sparks: ${saved.failure}${detailOf(saved)}`);
-      options.onSkin({ status: "failed", reason: "publish" });
-      return;
-    }
-    const before = await options.ownProjectIds();
-    const shelved = await addToLibrary(options.dataDir, png, "");
-    options.onLibraryChanged();
-    const session = await options.mintSession(saved.publishPath);
-    if (!session.ok) {
-      log(`the skin is on Sparks but no session could be minted: ${session.failure}`);
-      options.onSkin({ status: "failed", reason: "publish-later" });
-      return;
-    }
-    await writeLink({
-      ...updating === void 0 ? {} : { projectId: updating },
-      pending: {
-        localId: shelved?.entry.id ?? "",
-        before: before ?? [],
-        trusted: before !== void 0,
-        openedAt: (/* @__PURE__ */ new Date()).toISOString()
+    const image = `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
+    if (mode === "update") {
+      const target = await card();
+      if (!target || !options.updateSkin) return cardGone();
+      const updated = await options.updateSkin({
+        projectId: target.projectId,
+        image,
+        ...cover === void 0 ? {} : { cover },
+        modelTemplateId: parsed.templateId,
+        title: meta.title
+      });
+      if (updated.ok) return done(png, meta, updated, "skin update");
+      if (updated.failure === "not_found") {
+        await setCard(void 0);
+        return cardGone(updated.status);
       }
+      return stop(
+        updated.overPercent === void 0 ? { ok: false, reason: updated.failure } : { ok: false, reason: updated.failure, overPercent: updated.overPercent },
+        updated.status
+      );
+    }
+    const result = await options.publishProject({
+      type: "MODEL3D",
+      title: meta.title,
+      description: meta.description,
+      visibility: meta.visibility,
+      image,
+      ...cover === void 0 ? {} : { cover },
+      modelTemplateId: parsed.templateId,
+      ...meta.publishId === void 0 ? {} : { publishId: meta.publishId }
     });
+    if (!result.ok) {
+      return stop(
+        result.overPercent === void 0 ? { ok: false, reason: result.failure } : { ok: false, reason: result.failure, overPercent: result.overPercent },
+        result.status
+      );
+    }
+    return done(png, meta, result, "skin");
+  }
+  async function done(png, meta, result, kind) {
+    log(publishLogLine(kind, { ok: true, id: result.id }));
+    const who = options.owner();
     try {
-      await options.openExternal(session.url);
-    } catch {
-      log("could not open a browser for publishing");
-      options.onSkin({ status: "failed", reason: "no-browser" });
-      return;
-    }
-    log("opened a browser to finish publishing a skin");
-    options.onSkin({ status: "publish-opened" });
-  }
-  async function resolveFrom(ids) {
-    const link = await readLink();
-    const pending = link.pending;
-    if (!pending) return false;
-    if (Date.now() - Date.parse(pending.openedAt) > PENDING_STALE_MS) {
-      log("giving up on a publish nobody finished");
-      await writeLink(link.projectId === void 0 ? {} : { projectId: link.projectId });
-      return false;
-    }
-    if (!pending.trusted) {
-      return false;
-    }
-    const fresh = ids.filter((id) => !pending.before.includes(id));
-    let projectId;
-    if (fresh.length === 1) {
-      projectId = fresh[0];
-    } else if (fresh.length === 0 && link.projectId !== void 0 && ids.includes(link.projectId)) {
-      projectId = link.projectId;
-    } else if (fresh.length > 1) {
-      log(`cannot tell which of ${fresh.length} new projects this skin became; leaving it`);
-      return false;
-    }
-    if (projectId === void 0) return false;
-    if (pending.localId) await stampLibraryProject(options.dataDir, pending.localId, projectId);
-    await writeLink({ projectId });
-    options.onLibraryChanged();
-    log("a published skin found its project");
-    options.onSkin({ status: "published" });
-    return true;
-  }
-  return {
-    publish,
-    resolveFrom,
-    /**
-     * Ask Sparks who this child is now, and resolve against that.
-     *
-     * Separate from `resolveFrom` so the free callers stay free: the gallery
-     * hands over a list it already had, and only this one spends a request.
-     * Silent when nothing is pending, because that is every ordinary focus.
-     */
-    async resolve(reason) {
-      const link = await readLink();
-      if (!link.pending) return false;
-      const ids = await options.ownProjectIds();
-      if (!ids) {
-        log(`could not check whether a skin was published (${reason})`);
-        return false;
+      const shelved = await addToLibrary(options.dataDir, png, meta.title);
+      if (shelved) {
+        await stampLibraryProject(options.dataDir, shelved.entry.id, result.id, meta.title, who);
+        await markLibraryOwn(options.dataDir, shelved.entry.id);
+        if (kind === "skin update") {
+          await releaseLibraryProject(options.dataDir, result.id, shelved.entry.id);
+        }
       }
-      return resolveFrom(ids);
-    },
-    /** Whether a publish is waiting to be recognised, for the UI and for focus. */
-    async isPending() {
-      return (await readLink()).pending !== void 0;
+      options.onLibraryChanged();
+    } catch (error) {
+      log(`a published skin did not reach the shelf: ${String(error)}`);
     }
-  };
-}
-function detailOf(result) {
-  return result.detail === void 0 ? "" : ` (${result.detail})`;
+    await setCard({
+      projectId: result.id,
+      title: meta.title,
+      ...who === void 0 ? {} : { owner: who }
+    });
+    return {
+      ok: true,
+      publicPath: result.publicPath,
+      url: result.url,
+      crystalsEarned: result.crystalsEarned
+    };
+  }
+  return { publish, card, setCard };
 }
 const SKIN_TYPE = "MODEL3D";
 function createGalleryService(options) {
   const log = options.log ?? (() => {
   });
+  const ownProjects = /* @__PURE__ */ new Set();
+  let ownProjectsOf;
+  function ownSet() {
+    const who = options.account();
+    if (who !== ownProjectsOf) {
+      ownProjects.clear();
+      ownProjectsOf = who;
+    }
+    return ownProjects;
+  }
   async function localState() {
     const entries = await listLibrary(options.dataDir);
     const collected = /* @__PURE__ */ new Map();
     for (const entry of entries) {
-      if (entry.projectId) collected.set(entry.projectId, entry.id);
+      if (entry.projectId && !collected.has(entry.projectId)) {
+        collected.set(entry.projectId, entry.id);
+      }
     }
     const instance = options.instance();
     const username = options.username();
@@ -19887,7 +21752,7 @@ function createGalleryService(options) {
     return appliedId === void 0 ? { collected } : { collected, appliedId };
   }
   function describe2(project, collected, appliedId) {
-    const localId = collected.get(project.id);
+    const localId2 = collected.get(project.id);
     return {
       id: project.id,
       title: project.title,
@@ -19895,9 +21760,33 @@ function createGalleryService(options) {
       viewerOwnsThis: project.viewerOwnsThis,
       hasThumb: project.hasThumb,
       /** Present exactly when this machine holds a copy. */
-      ...localId ? { localId } : {},
-      worn: localId !== void 0 && localId === appliedId
+      ...localId2 ? { localId: localId2 } : {},
+      worn: localId2 !== void 0 && localId2 === appliedId
     };
+  }
+  async function fetchToShelf(projectId, title) {
+    const fileUrl2 = projectFileUrl(options.sparksUrl(), projectId);
+    let response;
+    try {
+      response = await options.fetchFile(fileUrl2);
+    } catch (error) {
+      log(`could not fetch a skin: ${String(error)}`);
+      return { ok: false, reason: "download" };
+    }
+    if (!response.ok) {
+      log(`Sparks refused a skin file (${response.status})`);
+      return { ok: false, reason: "download" };
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!pngSize(bytes)) return { ok: false, reason: "not-png" };
+    const added = await addToLibrary(options.dataDir, bytes, title, projectId);
+    if (!added) return { ok: false, reason: "not-png" };
+    if (ownSet().has(projectId)) {
+      await markLibraryOwn(options.dataDir, added.entry.id);
+      added.entry.own = true;
+    }
+    options.onLibraryChanged();
+    return { ok: true, ...added };
   }
   return {
     /**
@@ -19909,12 +21798,19 @@ function createGalleryService(options) {
      * a second answer that drifts.
      */
     async page(scope, cursor) {
+      const askedFor = options.account();
       const answer = await options.fetchPage(scope, cursor);
       if (!answer.ok) {
         const detail = answer.failure === "rejected" ? ` (${answer.detail ?? "no detail"})` : "";
         log(`could not read the ${scope} gallery: ${answer.failure}${detail}`);
         const failure = answer.failure === "rejected" ? "unavailable" : answer.failure;
         return { ok: false, failure };
+      }
+      const own = ownSet();
+      if (askedFor !== void 0 && askedFor === ownProjectsOf) {
+        for (const project of answer.items) {
+          if (project.viewerOwnsThis) own.add(project.id);
+        }
       }
       const { collected, appliedId } = await localState();
       return {
@@ -19942,31 +21838,14 @@ function createGalleryService(options) {
         });
         return;
       }
-      const fileUrl2 = projectFileUrl(options.sparksUrl(), projectId);
-      let response;
-      try {
-        response = await options.fetchFile(fileUrl2);
-      } catch (error) {
-        log(`could not fetch a skin: ${String(error)}`);
-        options.onSkin({ status: "failed", reason: "download" });
+      const shelved = await fetchToShelf(projectId, title);
+      if (!shelved.ok) {
+        options.onSkin(
+          shelved.reason === "download" ? { status: "failed", reason: "download" } : { status: "rejected", reason: "not-png" }
+        );
         return;
       }
-      if (!response.ok) {
-        log(`Sparks refused a skin file (${response.status})`);
-        options.onSkin({ status: "failed", reason: "download" });
-        return;
-      }
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (!pngSize(bytes)) {
-        options.onSkin({ status: "rejected", reason: "not-png" });
-        return;
-      }
-      const added = await addToLibrary(options.dataDir, bytes, title, projectId);
-      if (!added) {
-        options.onSkin({ status: "rejected", reason: "not-png" });
-        return;
-      }
-      options.onLibraryChanged();
+      const added = shelved;
       log(
         `collected a skin: ${added.entry.id} ${added.entry.width}x${added.entry.height}` + (added.alreadyThere ? " (already on the shelf)" : "")
       );
@@ -19977,6 +21856,11 @@ function createGalleryService(options) {
         alreadyThere: added.alreadyThere
       });
     },
+    /** Whether Sparks said this card is the signed-in child's. */
+    ownsProject(projectId) {
+      return ownSet().has(projectId);
+    },
+    fetchToShelf,
     /** Which type of project a gallery asks for. Here so callers cannot disagree. */
     type: SKIN_TYPE
   };
@@ -19987,6 +21871,7 @@ const ITEM_ADDRESS = /^kodland-img:\/\/item\/([a-z0-9_]{1,64})$/;
 const WORLD_ADDRESS = /^kodland-img:\/\/world\/([^/?#]{1,240})$/;
 const TEMPLATE_ADDRESS = /^kodland-img:\/\/template\/([a-z0-9][a-z0-9-]{0,62}-r\d{1,8})$/;
 const ART_ADDRESS = /^kodland-img:\/\/art\/([0-9a-f]{16})$/;
+const PHOTO_ADDRESS = /^kodland-img:\/\/photo(-thumb)?\/(\d{8}-\d{6}-[0-9a-f]{6})$/;
 function projectIdOfImageUrl(url) {
   const found = PROJECT_ADDRESS.exec(url);
   return found?.[1];
@@ -20012,6 +21897,11 @@ function templateKeyOfImageUrl(url) {
 }
 function artKeyOfImageUrl(url) {
   return ART_ADDRESS.exec(url)?.[1];
+}
+function photoOfImageUrl(url) {
+  const found = PHOTO_ADDRESS.exec(url);
+  if (!found?.[2]) return void 0;
+  return { id: found[2], thumb: found[1] !== void 0 };
 }
 function thumbUrlFor(sparksUrl, projectId) {
   return `${sparksUrl.replace(/\/+$/, "")}/api/projects/${projectId}/file?variant=thumb`;
@@ -20100,7 +21990,25 @@ function handleImages(options) {
       return new Response("no preview", { status: 404 });
     }
   }
+  async function photo(id, thumb) {
+    const tries = thumb ? [
+      { path: photoFile(options.dataDir, id, "thumb"), type: "image/jpeg" },
+      { path: photoFile(options.dataDir, id, "png"), type: "image/png" }
+    ] : [{ path: photoFile(options.dataDir, id, "png"), type: "image/png" }];
+    for (const attempt of tries) {
+      try {
+        const bytes = await promises.readFile(attempt.path);
+        return new Response(new Uint8Array(bytes), {
+          headers: { "content-type": attempt.type, "cache-control": "max-age=86400, immutable" }
+        });
+      } catch {
+      }
+    }
+    return new Response("no photo", { status: 404 });
+  }
   electron.protocol.handle(IMAGE_SCHEME, async (request) => {
+    const photoAddress = photoOfImageUrl(request.url);
+    if (photoAddress) return photo(photoAddress.id, photoAddress.thumb);
     const itemId = itemIdOfImageUrl(request.url);
     if (itemId) return itemIcon(itemId);
     const worldFolder = worldFolderOfImageUrl(request.url);
@@ -20147,9 +22055,7 @@ function handleImages(options) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     try {
       await promises.mkdir(thumbs, { recursive: true });
-      const temporary = `${cached2}.${process.pid}.${Date.now()}.part`;
-      await promises.writeFile(temporary, bytes);
-      await promises.rename(temporary, cached2);
+      await writeFileAtomic(cached2, bytes);
     } catch (error) {
       log(`could not cache a picture for ${projectId}: ${String(error)}`);
     }
@@ -20402,8 +22308,8 @@ function emptyFileCandidates(error) {
       const match = /^File (.+?) \(http/.exec(message);
       if (match?.[1]) paths.add(match[1]);
     }
-    const errors = value.errors;
-    if (Array.isArray(errors)) for (const nested of errors) visit(nested, depth + 1);
+    const errors2 = value.errors;
+    if (Array.isArray(errors2)) for (const nested of errors2) visit(nested, depth + 1);
     const cause = value.cause;
     if (cause) visit(cause, depth + 1);
   };
@@ -20673,10 +22579,21 @@ function createXmclLaunchEngine(options) {
     return { instance, versionId: fabricVersionId };
   }
   async function launch(launchOptions) {
+    try {
+      const e4mcMod = findResourcePath("e4mc-5.1.0-fabric.jar");
+      if (e4mcMod && node_fs.existsSync(e4mcMod)) {
+        const targetMods = node_path.join(launchOptions.instance, "mods");
+        node_fs.mkdirSync(targetMods, { recursive: true });
+        const targetJar = node_path.join(targetMods, "e4mc-5.1.0-fabric.jar");
+        if (!node_fs.existsSync(targetJar)) {
+          node_fs.copyFileSync(e4mcMod, targetJar);
+        }
+      }
+    } catch {}
     const folder = core.MinecraftFolder.from(launchOptions.instance);
     const version2 = await core.Version.parse(folder, launchOptions.versionId);
     const wantsOutput = launchOptions.onStdout !== void 0 || launchOptions.onStderr !== void 0;
-    const child = await core.launch({
+    const child2 = await core.launch({
       gamePath: launchOptions.instance,
       javaPath: launchOptions.javaPath,
       version: version2,
@@ -20709,7 +22626,7 @@ function createXmclLaunchEngine(options) {
       // them. Dropping the rest to pass one manifest flag would be a silent
       // performance regression on exactly the weak laptops we care about.
       ...launchOptions.extraJvmArgs && launchOptions.extraJvmArgs.length > 0 ? { extraJVMArgs: [...core.DEFAULT_EXTRA_JVM_ARGS, ...launchOptions.extraJvmArgs] } : {},
-      ...launchOptions.quickPlayWorld ? { extraMCArgs: ["--quickPlaySingleplayer", launchOptions.quickPlayWorld] } : {},
+      ...launchOptions.quickPlayMultiplayer ? { extraMCArgs: ["--quickPlayMultiplayer", launchOptions.quickPlayMultiplayer] } : (launchOptions.quickPlayWorld ? { extraMCArgs: ["--quickPlaySingleplayer", launchOptions.quickPlayWorld] } : {}),
       /*
        * `resolution`, which the library turns into `--width` and `--height`.
        *
@@ -20730,20 +22647,20 @@ function createXmclLaunchEngine(options) {
         ...wantsOutput ? { stdio: ["ignore", "pipe", "pipe"] } : {}
       }
     });
-    const pid = child.pid;
+    const pid = child2.pid;
     if (pid === void 0) throw new Error("The JVM was spawned but reported no pid");
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    if (launchOptions.onStdout) child.stdout?.on("data", launchOptions.onStdout);
-    if (launchOptions.onStderr) child.stderr?.on("data", launchOptions.onStderr);
+    child2.stdout?.setEncoding("utf8");
+    child2.stderr?.setEncoding("utf8");
+    if (launchOptions.onStdout) child2.stdout?.on("data", launchOptions.onStdout);
+    if (launchOptions.onStderr) child2.stderr?.on("data", launchOptions.onStderr);
     return {
       pid,
       waitForExit: () => new Promise((resolve, reject) => {
-        child.once("exit", (code) => resolve(code ?? 0));
-        child.once("error", reject);
+        child2.once("exit", (code) => resolve(code ?? 0));
+        child2.once("error", reject);
       }),
       close: () => {
-        child.kill();
+        child2.kill();
       }
     };
   }
@@ -20797,11 +22714,11 @@ async function directorySize(path) {
   }
   const sizes = await Promise.all(
     entries.map(async (entry) => {
-      const child = node_path.join(path, entry.name);
-      if (entry.isDirectory()) return directorySize(child);
+      const child2 = node_path.join(path, entry.name);
+      if (entry.isDirectory()) return directorySize(child2);
       if (!entry.isFile()) return 0;
       try {
-        return (await promises.stat(child)).size;
+        return (await promises.stat(child2)).size;
       } catch {
         return 0;
       }
@@ -20911,9 +22828,9 @@ function exitToken(code) {
 }
 function describe(error, maxChildren = 3) {
   if (error instanceof AggregateError) {
-    const kinds = tally(error.errors.map((child) => nameOf(child)));
-    const hosts = tally(error.errors.flatMap((child) => hostOf(child)));
-    const children = error.errors.slice(0, maxChildren).map((child) => describe(child, 0));
+    const kinds = tally(error.errors.map((child2) => nameOf(child2)));
+    const hosts = tally(error.errors.flatMap((child2) => hostOf(child2)));
+    const children = error.errors.slice(0, maxChildren).map((child2) => describe(child2, 0));
     const omitted = error.errors.length - children.length;
     const suffix = omitted > 0 ? ` (and ${omitted} more)` : "";
     const where = hosts.length > 0 ? ` hosts=[${hosts.join(", ")}]` : "";
@@ -20969,8 +22886,65 @@ async function readInstallId(dataDir) {
   } catch {
   }
   const fresh = node_crypto.randomBytes(16).toString("hex");
-  await promises.writeFile(path, fresh, "utf8");
+  await writeFileAtomic(path, fresh);
   return fresh;
+}
+const MAX_HELD = 64 * 1024;
+function scrubbedLineWriter(write, hideHome) {
+  let held = "";
+  return {
+    write(chunk) {
+      held += chunk;
+      const lastNewline = held.lastIndexOf("\n");
+      if (lastNewline >= 0) {
+        write(hideHome(held.slice(0, lastNewline + 1)));
+        held = held.slice(lastNewline + 1);
+      }
+      if (held.length > MAX_HELD) {
+        write(hideHome(held));
+        held = "";
+      }
+    },
+    end() {
+      if (held.length > 0) write(hideHome(held));
+      held = "";
+    }
+  };
+}
+const HOME_TOKEN = "%USERPROFILE%";
+const ONE_SEPARATOR = "(?:[\\\\/]|%5[cC]|%2[fF])";
+const SEPARATOR = `${ONE_SEPARATOR}+`;
+const NAME_GOES_ON = "(?![\\p{L}\\p{N}_.~-]|%(?!5[cC]|2[fF]))";
+const SHORT_NAME = '[^\\\\/:*?"<>|\\s~%]{1,6}~\\d{1,6}';
+function escapeForRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function anyHexCase(pattern) {
+  const either = (digit) => /[A-F]/.test(digit) ? `[${digit}${digit.toLowerCase()}]` : digit;
+  return pattern.replace(
+    /%([0-9A-F])([0-9A-F])/g,
+    (_match, high, low) => `%${either(high)}${either(low)}`
+  );
+}
+function partPattern(part) {
+  const forms = /* @__PURE__ */ new Set([part, encodeURI(part), encodeURIComponent(part)]);
+  const options = [...forms].map((form) => anyHexCase(escapeForRegExp(form)));
+  return options.length === 1 ? options[0] ?? "" : `(?:${options.join("|")})`;
+}
+function homeHider(home, platform) {
+  const parts = home.split(/[\\/]+/).filter((part) => part.length > 0);
+  const isRootOnly = parts.length === 0 || parts.length === 1 && /^[a-z]:$/i.test(parts[0] ?? "");
+  if (isRootOnly) return (line) => line;
+  const lead = /^[\\/]/.test(home) ? ONE_SEPARATOR : "";
+  const joinParts = (patterns) => lead + patterns.join(SEPARATOR);
+  const full = joinParts(parts.map(partPattern));
+  const parent = parts.slice(0, -1);
+  const hasParent = parent.length > 1 || parent.length === 1 && lead !== "";
+  const short = platform === "win32" && hasParent ? joinParts([...parent.map(partPattern), SHORT_NAME]) : void 0;
+  const either = short === void 0 ? full : `(?:${full}|${short})`;
+  const flags = platform === "win32" ? "giu" : "gu";
+  const pattern = new RegExp(`${either}${NAME_GOES_ON}`, flags);
+  return (line) => line.replace(pattern, HOME_TOKEN);
 }
 const MIN_XMX_MB = 1024;
 const MAX_XMX_MB = 8192;
@@ -21157,6 +23131,7 @@ function createLauncherService(options) {
   const { dataDir, env, onState } = options;
   const log = options.log ?? (() => {
   });
+  const hideHome = options.hideHome ?? homeHider(node_os.homedir(), process.platform);
   const engine = options.engine ?? createXmclLaunchEngine({ dataDir, log });
   let prepared;
   let preparing = false;
@@ -21172,6 +23147,16 @@ function createLauncherService(options) {
   const fetchingWorlds = /* @__PURE__ */ new Set();
   const failedWorlds = /* @__PURE__ */ new Set();
   const seeding = /* @__PURE__ */ new Set();
+  const worldCopies = /* @__PURE__ */ new Set();
+  async function copyWorld(...args) {
+    const copy = createMyWorld(...args);
+    worldCopies.add(copy);
+    try {
+      return await copy;
+    } finally {
+      worldCopies.delete(copy);
+    }
+  }
   const worldSizeCache = /* @__PURE__ */ new Map();
   let lastUnlockSyncMs = 0;
   let running;
@@ -21449,6 +23434,11 @@ function createLauncherService(options) {
       log(
         library.length === 0 ? "world library: nothing open on this machine" : `world library: ${library.map((entry) => `${entry.folder} (${entry.outcome})`).join(", ")}`
       );
+      for (const entry of library) {
+        if (entry.outcome !== "refused") continue;
+        failedWorlds.add(entry.worldId);
+        log(`world library: "${entry.worldId}" r${entry.revision} refused: ${entry.reason ?? ""}`);
+      }
       const clientVersion = await readClientVersionInfo(installed.instance, pack.minecraft).catch(
         (error) => {
           log(`could not read the client version stamp, so no fast start: ${String(error)}`);
@@ -21511,6 +23501,7 @@ function createLauncherService(options) {
       migrationInFlight = void 0;
     }
     migrationInFlight ??= (async () => {
+      if (running === void 0) await sweepWorlds(pack);
       const installed = await readInstalledWorlds(dataDir, pack.packId);
       const worlds = await migrateMyWorlds(dataDir, pack.packId, pack.worlds, installed);
       await adoptLegacyChoice(worlds, pack);
@@ -21520,6 +23511,17 @@ function createLauncherService(options) {
     } catch (error) {
       log(`could not record the worlds on disk: ${String(error)}`);
       migrationInFlight = void 0;
+    }
+  }
+  async function sweepWorlds(pack) {
+    try {
+      for (const entry of await sweepBrokenCopies(dataDir, pack.packId, pack.worlds)) {
+        log(
+          entry.ok ? `removed the world folder "${entry.folder}": no level.dat, a copy that did not finish` : `could not remove the world folder "${entry.folder}" (no level.dat): ${entry.error ?? ""}`
+        );
+      }
+    } catch (error) {
+      log(`could not check for broken world folders: ${String(error)}`);
     }
   }
   async function adoptLegacyChoice(worlds, pack) {
@@ -21570,7 +23572,12 @@ function createLauncherService(options) {
         for (const world of wanted) {
           const startedAt = Date.now();
           try {
-            await syncWorldLibrary(dataDir, pack.packId, [world], void 0, fetchFile);
+            const [entry] = await syncWorldLibrary(dataDir, pack.packId, [world], void 0, fetchFile);
+            if (entry?.outcome === "refused") {
+              failedWorlds.add(world.id);
+              log(`world library: "${world.id}" r${world.revision} refused: ${entry.reason ?? ""}`);
+              continue;
+            }
             const mb2 = Math.round(
               await directorySize(templateDir(dataDir, pack.packId, world.id, world.revision)) / (1024 * 1024)
             );
@@ -21620,7 +23627,7 @@ function createLauncherService(options) {
     const [templates, open] = await Promise.all([templatesOf(pack), openManifestWorlds(pack)]);
     const ready = templates.find((entry) => entry.id === lessonId)?.ready === true;
     if (!ready) return;
-    const template = templateFor(lessonId, open, templates);
+    const template = templateFor(lessonId, pack, open, templates);
     if (!template) return;
     seeding.add(lessonId);
     try {
@@ -21629,14 +23636,19 @@ function createLauncherService(options) {
         pack.minecraft
       ).catch(() => void 0));
       if (template.kind !== "manifest" && !version2) return;
-      const made = await createMyWorld(dataDir, pack.packId, template, version2);
+      const made = await copyWorld(dataDir, pack.packId, template, version2);
       if (made.ok) {
         log(`first world of "${lessonId}" made on opening it: ${made.world.folder}`);
         options.onCatalogue?.();
+      } else {
+        log(`first world of "${lessonId}" not made: ${made.reason}${detailOf(made)}`);
       }
     } finally {
       seeding.delete(lessonId);
     }
+  }
+  function detailOf(made) {
+    return made.detail ? ` (${made.detail})` : "";
   }
   function templateOf(world) {
     switch (world.source.kind) {
@@ -21656,8 +23668,10 @@ function createLauncherService(options) {
     ]);
     return listTemplates(pack.worlds.length > 0 ? open : void 0, library);
   }
-  function templateFor(id, open, templates) {
-    if (id === RANDOM_WORLD_ID) return { kind: "random" };
+  function templateFor(id, pack, open, templates, chosenMode) {
+    if (id === RANDOM_WORLD_ID) {
+      return chosenMode === "creative" ? { kind: "random", gameMode: "creative" } : { kind: "random" };
+    }
     const preset = findPreset(id);
     if (preset?.seed !== void 0 && preset.seed !== null && templates.some((entry) => entry.id === id)) {
       return { kind: "preset", worldId: preset.id, folderBase: preset.folder, seed: preset.seed };
@@ -21668,13 +23682,23 @@ function createLauncherService(options) {
       kind: "manifest",
       worldId: world.id,
       revision: world.revision,
-      folderBase: world.name
+      folderBase: world.name,
+      gameMode: packGameMode(pack)
     };
   }
   async function resolveWorld(game) {
     const pack = game.manifest;
     await ensureMyWorlds(pack);
     const settings = await readSettings(dataDir);
+    if (settings.myWorldId === "live-lesson") {
+      const teacherRoom = settings.teacherCode ? await queryTeacherRoom(settings.teacherCode) : null;
+      if (!teacherRoom || !teacherRoom.active || !teacherRoom.url) {
+        log("live lesson: teacher is offline or code not set; launching into standard main menu");
+        return void 0;
+      }
+      log("launching into live lesson via quickPlayMultiplayer");
+      return "live-lesson";
+    }
     if (settings.myWorldId === "minecraft-menu") {
       log("launching into standard Minecraft main menu (quickPlay disabled)");
       return void 0;
@@ -21682,7 +23706,9 @@ function createLauncherService(options) {
     const worlds = await readMyWorlds(dataDir, pack.packId);
     const chosen = pickMyWorld(worlds, settings.myWorldId);
     if (chosen) {
-      enableCheatsInLevelDat(node_path.join(instanceLayout(dataDir, pack.packId).saves, chosen.folder, "level.dat"));
+      if (chosen.id === "minecraft-menu" || chosen.folder === "minecraft-menu") return void 0;
+      const layout = instanceLayout(dataDir, pack.packId);
+      enableCheatsInLevelDat(node_path.join(layout.saves, chosen.folder, "level.dat"));
       return chosen.folder;
     }
     try {
@@ -21690,16 +23716,17 @@ function createLauncherService(options) {
       const templates = await templatesOf(pack);
       const open = await openManifestWorlds(pack);
       const first = templates.find((entry) => entry.ready) ?? templates[templates.length - 1];
-      const template = first ? templateFor(first.id, open, templates) : void 0;
-      const made = template ? await createMyWorld(dataDir, pack.packId, template, version2) : void 0;
+      const template = first ? templateFor(first.id, pack, open, templates) : void 0;
+      const made = template ? await copyWorld(dataDir, pack.packId, template, version2) : void 0;
       if (made?.ok) {
         await updateSettings(dataDir, { myWorldId: made.world.id });
         options.onCatalogue?.();
         log(`first world "${made.world.folder}" created from ${first?.id ?? "nothing"}`);
-        enableCheatsInLevelDat(node_path.join(instanceLayout(dataDir, pack.packId).saves, made.world.folder, "level.dat"));
         return made.world.folder;
       }
-      log(`could not make a first world: ${made?.ok === false ? made.reason : "no footprint"}`);
+      log(
+        `could not make a first world: ${made?.ok === false ? `${made.reason}${detailOf(made)}` : "no footprint"}`
+      );
       return void 0;
     } catch (error) {
       log(`could not prepare a world, the game will open at the menu: ${String(error)}`);
@@ -21738,6 +23765,7 @@ function createLauncherService(options) {
     if (!game) return;
     let startupFallback;
     let logStream;
+    let gameLog;
     try {
       setState({ status: "starting" });
       const memory = decideMaxMemoryMb(node_os.totalmem(), game.manifest.memory?.xmxMb);
@@ -21755,7 +23783,7 @@ function createLauncherService(options) {
       }
       await ensureSkinLoaderConfig(game.instance);
       const worldName = await timed("world shortcut", () => resolveWorld(game));
-      if (worldName !== void 0 && options.onWorldChosen) {
+      if (worldName !== void 0 && worldName !== "live-lesson" && options.onWorldChosen) {
         await timed("data packs", async () => {
           try {
             await options.onWorldChosen?.(worldName);
@@ -21766,7 +23794,9 @@ function createLauncherService(options) {
       }
       const username = launchUsername(identity, options.isPackaged) ?? DEV_USERNAME;
       if (!identity) log("launching with the development nickname - no student is signed in");
-      logStream = await openJvmLog(dataDir);
+      const stream2 = await openJvmLog(dataDir);
+      logStream = stream2;
+      gameLog = scrubbedLineWriter((text) => stream2.write(text), hideHome);
       let stage;
       let reachedGame = false;
       let buffered = "";
@@ -21802,7 +23832,23 @@ function createLauncherService(options) {
         assumeGame();
       }, options.startupGraceMs ?? STARTUP_GRACE_MS);
       const onGameOutput = (chunk) => {
-        logStream?.write(chunk);
+        gameLog?.write(chunk);
+        const e4mcMatch = chunk.match(/([a-z0-9-]+\.e4mc\.link)/i);
+        if (e4mcMatch && e4mcMatch[1] && !activeBeaconUrl) {
+          activeBeaconUrl = e4mcMatch[1];
+          log(`[CraftForge] e4mc live tunnel detected: ${activeBeaconUrl}`);
+          const teacherCode = (launcherSettings.teacherCode || identity?.login || identity?.nickname || launcherSettings.lastNickname || "").trim();
+          const teacherName = (launcherSettings.teacherName || identity?.nickname || identity?.login || launcherSettings.lastNickname || "").trim();
+          if (teacherCode) {
+            void reportTeacherSession(teacherCode, teacherName, activeBeaconUrl, true);
+            if (beaconHeartbeat) clearInterval(beaconHeartbeat);
+            beaconHeartbeat = setInterval(() => {
+              if (activeBeaconUrl) {
+                void reportTeacherSession(teacherCode, teacherName, activeBeaconUrl, true);
+              }
+            }, 25000);
+          }
+        }
         buffered += chunk;
         const lines = buffered.split(/\r?\n/);
         buffered = lines.pop() ?? "";
@@ -21852,7 +23898,7 @@ function createLauncherService(options) {
           else publishStarting();
         }
       };
-      const child = await engine.launch({
+      const child2 = await engine.launch({
         instance: game.instance,
         versionId: game.versionId,
         javaPath: game.javaPath,
@@ -21863,7 +23909,9 @@ function createLauncherService(options) {
         // confused - one is a placeholder, the other is a credential.
         accessToken: "0",
         maxMemoryMb: memory.xmxMb,
-        ...worldName === void 0 ? {} : { quickPlayWorld: worldName },
+        ...worldName === void 0 ? {} : (
+          worldName === "live-lesson" ? { quickPlayMultiplayer: (await queryTeacherRoom(launcherSettings.teacherCode || ""))?.url } : { quickPlayWorld: worldName }
+        ),
         extraJvmArgs: game.manifest.jvmArgs,
         ...(() => {
           const size = options.gameWindowSize?.();
@@ -21872,15 +23920,27 @@ function createLauncherService(options) {
         onStdout: onGameOutput,
         onStderr: onGameOutput
       });
-      running = child;
+      running = child2;
       runningUnconfirmed = false;
       const spawnedAt = Date.now();
-      log(`jvm pid ${child.pid} as ${username}`);
+      log(`jvm pid ${child2.pid} as ${username}`);
       publishStarting();
-      const code = await child.waitForExit();
+      const code = await child2.waitForExit();
       const livedMs = Date.now() - spawnedAt;
       running = void 0;
       runningUnconfirmed = false;
+      if (beaconHeartbeat) {
+        clearInterval(beaconHeartbeat);
+        beaconHeartbeat = void 0;
+      }
+      if (activeBeaconUrl) {
+        const teacherCode = (launcherSettings.teacherCode || identity?.login || identity?.nickname || launcherSettings.lastNickname || "").trim();
+        const teacherName = (launcherSettings.teacherName || identity?.nickname || identity?.login || launcherSettings.lastNickname || "").trim();
+        if (teacherCode) {
+          void reportTeacherSession(teacherCode, teacherName, "", false);
+        }
+        activeBeaconUrl = void 0;
+      }
       prepared = game;
       log(`game exited with code ${code}`);
       resumeDeferredLibrary();
@@ -21901,7 +23961,9 @@ function createLauncherService(options) {
       setState({ status: "failed", failure });
     } finally {
       clearTimeout(startupFallback);
-      logStream?.end();
+      gameLog?.end();
+      const stream2 = logStream;
+      if (stream2) await new Promise((resolve) => stream2.end(() => resolve()));
     }
   }
   async function adoptStamp(pack, state) {
@@ -21981,6 +24043,11 @@ function createLauncherService(options) {
     worldsSrcPath() {
       if (!packCache) return void 0;
       return instanceLayout(dataDir, packCache.manifest.packId).worldsSrc;
+    },
+    /** Where the camera mod drops a photo. Same argument as above. */
+    photosInboxPath() {
+      if (!packCache) return void 0;
+      return instanceLayout(dataDir, packCache.manifest.packId).photosInbox;
     },
     /**
      * Ask Sparks again whether the build changed.
@@ -22195,10 +24262,11 @@ function createLauncherService(options) {
     async worldTemplates() {
       const pack = await manifest();
       await ensureMyWorlds(pack);
-      const [templates, open, mine] = await Promise.all([
+      const [templates, open, mine, settings] = await Promise.all([
         templatesOf(pack),
         openManifestWorlds(pack),
-        readMyWorlds(dataDir, pack.packId)
+        readMyWorlds(dataDir, pack.packId),
+        readSettings(dataDir)
       ]);
       const layout = instanceLayout(dataDir, pack.packId);
       const copies = /* @__PURE__ */ new Map();
@@ -22220,8 +24288,38 @@ function createLauncherService(options) {
           async (template) => template.artKey === null ? false : await exists2(node_path.join(layout.worldsSrc, "art", `${template.artKey}.png`))
         )
       );
+      const isStaff = (options.isStaff?.() ?? false) || settings.isStaff === true;
+      const teacherCode = (settings.teacherCode || (isStaff ? settings.lastNickname : "") || "").trim();
+      let liveTemplate = null;
+      if (teacherCode) {
+        const teacherRoom = await queryTeacherRoom(teacherCode);
+        if (teacherRoom && teacherRoom.active && teacherRoom.url) {
+          const displayName = teacherRoom.teacherName || teacherCode;
+          liveTemplate = {
+            id: "live-lesson",
+            kind: "manifest",
+            name: "Öğretmenin Dünyası",
+            title: {
+              en: "Öğretmenin Dünyası",
+              tr: "Öğretmenin Dünyası",
+              ru: "Мир учителя"
+            },
+            seed: null,
+            previewKey: null,
+            artKey: null,
+            description: {
+              en: `${displayName} is currently in class! Join the world with one click.`,
+              tr: `${displayName} şu an derste! Tek tıkla doğrudan dünyaya katılın.`
+            },
+            ready: true,
+            downloading: false,
+            failed: false,
+            copies: 1
+          };
+        }
+      }
       return {
-        templates: templates.map((template, index) => ({
+        templates: [...(liveTemplate ? [liveTemplate] : []), ...templates.map((template, index) => ({
           id: template.id,
           kind: template.kind,
           seed: template.seed,
@@ -22233,8 +24331,15 @@ function createLauncherService(options) {
           downloading: fetchingWorlds.has(template.id),
           failed: failedWorlds.has(template.id),
           copies: copies.get(template.id) ?? 0
-        })),
-        hasLocked: open.length < pack.worlds.length
+        }))],
+        teacherCode: teacherCode || "",
+        hasLocked: open.length < pack.worlds.length,
+        // The field stays whether or not anything is still shut: a child whose
+        // Studios vanished after a world update gets them back by typing the
+        // same code again, so the way in cannot disappear once every lesson is
+        // open. It is absent only on a pack that gates nothing, where a code
+        // would match no world at all.
+        hasCodes: pack.worlds.some((world) => world.unlockHash !== void 0)
       };
     },
     /**
@@ -22260,21 +24365,30 @@ function createLauncherService(options) {
         ...row,
         title: row.templateId === null ? null : titles.get(row.templateId) ?? null
       }));
-      const menuWorld = {
-        id: "minecraft-menu",
-        folder: "",
-        name: "Ana Menü (Standart Minecraft)",
-        source: "preset",
-        templateId: "minecraft-menu",
-        seed: null,
-        played: "today",
-        ordinal: 0,
-        hasPreview: false,
-        updateAvailable: false,
-        title: "Ana Menü (Dünyasız)"
-      };
-      const chosenId = settings.myWorldId === "minecraft-menu" ? "minecraft-menu" : (pickMyWorld(worlds, settings.myWorldId)?.id ?? null);
-      return { worlds: [menuWorld, ...views], chosenId };
+      const isStaff = (options.isStaff?.() ?? false) || settings.isStaff === true;
+      const teacherCode = (settings.teacherCode || (isStaff ? settings.lastNickname : "") || "").trim();
+      let liveWorld = null;
+      if (teacherCode) {
+        const teacherRoom = await queryTeacherRoom(teacherCode);
+        if (teacherRoom && teacherRoom.active && teacherRoom.url) {
+          const displayName = teacherRoom.teacherName || teacherCode;
+          liveWorld = {
+            id: "live-lesson",
+            folder: "live-lesson",
+            name: `🟢 Öğretmenin Dünyası (${displayName})`,
+            source: "adopted",
+            templateId: "live-lesson",
+            seed: null,
+            played: "now",
+            ordinal: 0,
+            hasPreview: false,
+            updateAvailable: false,
+            title: `🟢 Öğretmenin Dünyası (${displayName})`
+          };
+        }
+      }
+      const chosenId = settings.myWorldId === "live-lesson" && liveWorld ? "live-lesson" : (pickMyWorld(worlds, settings.myWorldId)?.id ?? null);
+      return { worlds: [...(liveWorld ? [liveWorld] : []), ...views], chosenId };
     },
     /**
      * Take a copy of one footprint.
@@ -22284,7 +24398,12 @@ function createLauncherService(options) {
      * game first, the jar only as a fallback - that read is a full unzip of
      * ~30 MB for one integer.
      */
-    async createWorld(templateId) {
+    async createWorld(templateId, chosen = {}) {
+      if (templateId === "live-lesson") {
+        await updateSettings(dataDir, { myWorldId: "live-lesson" });
+        options.onCatalogue?.();
+        return { ok: true, id: "live-lesson" };
+      }
       if (templateId === "minecraft-menu") {
         await updateSettings(dataDir, { myWorldId: "minecraft-menu" });
         options.onCatalogue?.();
@@ -22293,7 +24412,7 @@ function createLauncherService(options) {
       const pack = await manifest();
       await ensureMyWorlds(pack);
       const [templates, open] = await Promise.all([templatesOf(pack), openManifestWorlds(pack)]);
-      const template = templateFor(templateId, open, templates);
+      const template = templateFor(templateId, pack, open, templates, chosen.gameMode);
       if (!template) return { ok: false, reason: "no-template" };
       let version2 = prepared?.clientVersion;
       if (!version2 && template.kind !== "manifest") {
@@ -22313,11 +24432,12 @@ function createLauncherService(options) {
           neededMb: verdict.requiredMb
         };
       }
-      const made = await createMyWorld(dataDir, pack.packId, template, version2);
+      const made = await copyWorld(dataDir, pack.packId, template, version2);
       if (!made.ok) {
-        log(`could not create a world from "${templateId}": ${made.reason}`);
+        log(`could not create a world from "${templateId}": ${made.reason}${detailOf(made)}`);
         return { ok: false, reason: made.reason };
       }
+      if (made.warning) log(`world "${made.world.folder}" from "${templateId}": ${made.warning}`);
       await updateSettings(dataDir, { myWorldId: made.world.id });
       log(`world "${made.world.folder}" created from "${templateId}"`);
       options.onCatalogue?.();
@@ -22382,6 +24502,131 @@ function createLauncherService(options) {
       return done;
     },
     /**
+     * Save one copy into a zip the child chose, to carry it to another computer.
+     *
+     * Refused while the game is running: the JVM writes into the folder, and a
+     * zip taken in the middle of a save is a world that will not open on the
+     * other side. Only a lesson copy or a numbered seed - the kinds an import
+     * can check (`world-archive.ts`).
+     */
+    async exportWorld(id, filePath) {
+      if (running) return { ok: false, reason: "game-running" };
+      const pack = await manifest();
+      const world = (await readMyWorlds(dataDir, pack.packId)).find((entry) => entry.id === id);
+      if (!world || !isSafeFolderName(world.folder)) return { ok: false, reason: "not-found" };
+      const source = world.source;
+      if (source.kind !== "manifest" && source.kind !== "preset") {
+        return { ok: false, reason: "not-ours" };
+      }
+      try {
+        const zip = await packWorldArchive(
+          node_path.join(instanceLayout(dataDir, pack.packId).saves, world.folder),
+          { format: 1, source, name: world.name, exportedAt: (/* @__PURE__ */ new Date()).toISOString() }
+        );
+        await promises.writeFile(filePath, zip);
+      } catch (error) {
+        log(`could not save world "${world.folder}" into a file: ${String(error)}`);
+        return { ok: false, reason: "failed" };
+      }
+      log(`world "${world.folder}" saved into a file`);
+      return { ok: true, fileName: node_path.basename(filePath) };
+    },
+    /**
+     * Bring a world in from a file, as a copy of the lesson it came from.
+     *
+     * The order is the argument: everything that can refuse runs before a byte
+     * is written. The marker says which lesson the world claims to be; the
+     * lesson must be in this course and open for this child - an import must
+     * not be a way past a lesson code - and the world's own seed must be that
+     * lesson's seed, read from the footprint on this disk. A world from
+     * anywhere else carries a different seed, whatever its marker says.
+     */
+    async importWorld(filePath) {
+      const pack = await manifest();
+      await ensureMyWorlds(pack);
+      let bytes;
+      try {
+        if ((await promises.stat(filePath)).size > WORLD_ARCHIVE_LIMITS.fileMaxBytes) {
+          return { ok: false, reason: "too-large" };
+        }
+        bytes = await promises.readFile(filePath);
+      } catch (error) {
+        log(`could not read a world file: ${String(error)}`);
+        return { ok: false, reason: "failed" };
+      }
+      const opened = await openWorldArchive(bytes);
+      if (!opened.ok) {
+        log(`refused a world file: ${opened.reason} (${opened.detail})`);
+        return { ok: false, reason: opened.reason };
+      }
+      const { marker, seed } = opened.archive;
+      let source;
+      let folderBase;
+      let expected;
+      if (marker.source.kind === "manifest") {
+        const world = matchWorld(pack.worlds, marker.source.worldId);
+        if (!world) return refuse("other-course", `no lesson "${marker.source.worldId}"`);
+        if (!(await openManifestWorlds(pack)).includes(world)) {
+          return refuse("locked", `lesson "${world.id}" is not open here`);
+        }
+        const held = (await listWorldLibrary(dataDir, pack.packId)).get(world.id);
+        if (held === void 0) return refuse("not-ready", `no footprint of "${world.id}" yet`);
+        expected = await seedOfWorldFolder(templateDir(dataDir, pack.packId, world.id, held));
+        source = {
+          kind: "manifest",
+          worldId: world.id,
+          // The revision belongs to the id it was saved under; under a moved id
+          // it is unknown, which offers the child a fresh copy.
+          revision: world.id === marker.source.worldId ? marker.source.revision : null
+        };
+        folderBase = world.name;
+      } else {
+        const preset = findPreset(marker.source.worldId);
+        if (preset?.seed === void 0 || preset.seed === null) {
+          return refuse("other-course", `no preset "${marker.source.worldId}"`);
+        }
+        expected = preset.seed;
+        source = { kind: "preset", worldId: preset.id, seed: preset.seed.toString() };
+        folderBase = preset.folder;
+      }
+      if (expected === void 0 || seed === void 0 || seed !== expected) {
+        return refuse("not-ours", `the seed is not the seed of "${source.worldId}"`);
+      }
+      const verdict = describeSpace(
+        await freeBytes(dataDir),
+        Math.ceil(opened.archive.unpackedBytes / (1024 * 1024))
+      );
+      if (!verdict.ok) {
+        log(`no room to bring in a world: ${verdict.freeMb} MB free, ${verdict.requiredMb} MB needed`);
+        return { ok: false, reason: "no-disk", freeMb: verdict.freeMb, neededMb: verdict.requiredMb };
+      }
+      const copy = importMyWorld(dataDir, pack.packId, {
+        source,
+        name: marker.name,
+        folderBase,
+        fill: (staged) => opened.archive.extract(staged)
+      });
+      worldCopies.add(copy);
+      let made;
+      try {
+        made = await copy;
+      } finally {
+        worldCopies.delete(copy);
+      }
+      if (!made.ok) {
+        log(`could not bring in a world: ${made.reason}${detailOf(made)}`);
+        return { ok: false, reason: "failed" };
+      }
+      await updateSettings(dataDir, { myWorldId: made.world.id });
+      log(`world "${made.world.folder}" brought in from a file, a copy of "${source.worldId}"`);
+      options.onCatalogue?.();
+      return { ok: true, id: made.world.id, lessonId: source.worldId };
+      function refuse(reason, detail) {
+        log(`refused a world file: ${reason} (${detail})`);
+        return { ok: false, reason };
+      }
+    },
+    /**
      * Delete one copy.
      *
      * The first thing in this launcher that deletes what a child built, so it
@@ -22414,18 +24659,42 @@ function createLauncherService(options) {
      * code on a miss, the same rule as everywhere else that a secret passes through.
      */
     async unlockWorld(code) {
+      const trimmed = (code || "").trim();
+      if (trimmed.startsWith("@") || trimmed.includes(".") || /^(hoca:|teacher:)/i.test(trimmed)) {
+        const actualCode = trimmed.replace(/^[@]|^(hoca:|teacher:)/i, "").trim().toLowerCase();
+        await updateSettings(dataDir, { teacherCode: actualCode });
+        options.onCatalogue?.();
+        log(`[CraftForge] teacherCode updated via unlock modal: ${actualCode}`);
+        return { ok: true, worldId: "live-lesson", alreadyOpen: false };
+      }
       const pack = await manifest();
       const hash = hashUnlockCode(code);
       const match = pack.worlds.find((world) => world.unlockHash === hash);
       if (!match) {
+        if (trimmed.length >= 3) {
+          const beaconCheck = await queryTeacherRoom(trimmed);
+          if (beaconCheck && beaconCheck.ok) {
+            await updateSettings(dataDir, { teacherCode: trimmed.toLowerCase() });
+            options.onCatalogue?.();
+            log(`[CraftForge] teacherCode matched via beacon: ${trimmed}`);
+            return { ok: true, worldId: "live-lesson", alreadyOpen: false };
+          }
+        }
         log("world unlock: code matched no world");
         return { ok: false, reason: "no-match" };
       }
       const settings = await readSettings(dataDir);
-      if (openWorlds([match], unlockedWorldsFor(settings, pack.packId)).length > 0) {
+      const wasOpen = openWorlds([match], unlockedWorldsFor(settings, pack.packId)).length > 0;
+      const teaches = (match.teaches ?? []).filter(
+        (studio) => studio === "datapacks" || studio === "python"
+      );
+      const grantedBefore = settings.grantedStudios?.[pack.packId] ?? [];
+      const missingStudios = teaches.filter((studio) => !grantedBefore.includes(studio));
+      if (wasOpen && missingStudios.length === 0) {
         return { ok: true, worldId: match.id, alreadyOpen: true };
       }
       await recordUnlockedWorld(dataDir, pack.packId, match.id);
+      if (teaches.length > 0) await addToPackList(dataDir, "grantedStudios", pack.packId, teaches);
       log(`world unlocked: ${match.id}`);
       options.onCatalogue?.();
       void syncWorldUnlocks("a world was unlocked").catch(() => {
@@ -22530,6 +24799,57 @@ async function openJvmLog(dataDir) {
   await promises.mkdir(directory, { recursive: true });
   const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
   return node_fs.createWriteStream(node_path.join(directory, `game-${stamp}.log`), { flags: "a" });
+}
+function createLogger(options) {
+  const append = options.append ?? ((path, text) => promises.appendFile(path, text));
+  const now = options.now ?? (() => /* @__PURE__ */ new Date());
+  let inFlight;
+  return (message) => {
+    const safe = options.hideHome(message);
+    const line = `${now().toISOString()} ${safe}
+`;
+    const write = () => append(options.path, line).catch(() => {
+    });
+    const current = (inFlight ? inFlight.then(write) : write()).finally(() => {
+      if (inFlight === current) inFlight = void 0;
+    });
+    inFlight = current;
+    options.echo?.(safe);
+  };
+}
+const STAMP = ".home-hidden";
+function isOurLog(name) {
+  return name === "launcher.log" || name === "launcher.log.1" || /^game-.+\.log$/.test(name);
+}
+async function hideHomeInOldLogs(logsDir, hideHome, io = {}) {
+  const write = io.write ?? ((path, text) => writeFileAtomic(path, text));
+  const stamp = node_path.join(logsDir, STAMP);
+  let names;
+  try {
+    names = await promises.readdir(logsDir);
+  } catch {
+    return { ran: true, rewritten: 0 };
+  }
+  if (names.includes(STAMP)) return { ran: false, rewritten: 0 };
+  let rewritten = 0;
+  let failed = false;
+  for (const name of names.filter(isOurLog)) {
+    const path = node_path.join(logsDir, name);
+    try {
+      const bytes = await promises.readFile(path);
+      const text = bytes.toString("utf8");
+      if (!Buffer.from(text, "utf8").equals(bytes)) continue;
+      const clean = hideHome(text);
+      if (clean === text) continue;
+      await write(path, clean);
+      rewritten += 1;
+    } catch {
+      failed = true;
+    }
+  }
+  if (!failed) await promises.writeFile(stamp, "").catch(() => {
+  });
+  return { ran: true, rewritten };
 }
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
 const KEPT_GAME_LOGS = 20;
@@ -22678,6 +24998,8 @@ function createShelfService(options) {
           id: entry.id,
           title: entry.title,
           ...entry.projectId === void 0 ? {} : { projectId: entry.projectId },
+          // The child's own, so the Studio may open it; see `isOwnSkin`.
+          ...isOwnSkin(entry) ? { editable: true } : {},
           width: entry.width,
           height: entry.height,
           png
@@ -22762,6 +25084,74 @@ function createShelfService(options) {
 function toPngDataUri(bytes) {
   return `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`;
 }
+const SHELF_ID = /^[0-9a-f]{16}$/;
+const PROJECT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+async function openOwnSkin(deps, source) {
+  const wanted = readSource(source);
+  if (!wanted) return { ok: false, reason: "not-own" };
+  let shelfId;
+  if ("projectId" in wanted) {
+    if (!deps.ownsProject(wanted.projectId)) return { ok: false, reason: "not-own" };
+    const shelved = await deps.fetchToShelf(wanted.projectId, wanted.title);
+    if (!shelved.ok) return { ok: false, reason: shelved.reason };
+    shelfId = shelved.entry.id;
+  } else {
+    const entry = (await listLibrary(deps.dataDir)).find((row) => row.id === wanted.shelfId);
+    if (!entry) return { ok: false, reason: "gone" };
+    if (!isOwnSkin(entry)) return { ok: false, reason: "not-own" };
+    shelfId = entry.id;
+  }
+  const bytes = await readLibrarySkin(deps.dataDir, shelfId);
+  if (!bytes) return { ok: false, reason: "gone" };
+  return {
+    ok: true,
+    shelfId,
+    png: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`
+  };
+}
+async function cardOfShelfRow(dataDir, shelfId) {
+  const entry = (await listLibrary(dataDir)).find((row) => row.id === shelfId);
+  if (!entry?.projectId || entry.own !== true) return void 0;
+  return {
+    projectId: entry.projectId,
+    title: entry.title,
+    ...entry.projectOwner === void 0 ? {} : { owner: entry.projectOwner }
+  };
+}
+function readSource(source) {
+  if (typeof source !== "object" || source === null) return void 0;
+  const record2 = source;
+  if (typeof record2["shelfId"] === "string" && SHELF_ID.test(record2["shelfId"])) {
+    return { shelfId: record2["shelfId"] };
+  }
+  if (typeof record2["projectId"] === "string" && PROJECT_ID.test(record2["projectId"])) {
+    const title = typeof record2["title"] === "string" ? record2["title"].slice(0, 200) : "";
+    return { projectId: record2["projectId"], title };
+  }
+  return void 0;
+}
+function fileNameOf(title) {
+  const text = typeof title === "string" ? title : "";
+  const visible = Array.from(text, (char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code < 32 || code === 127 || '<>:"/\\|?*'.includes(char) ? " " : char;
+  }).join("");
+  const cleaned = Array.from(visible.replace(/\s+/g, " ").trim()).slice(0, 60).join("").replace(/[. ]+$/, "");
+  return cleaned === "" ? "world" : cleaned;
+}
+function claimSingleInstance(app, onSecondLaunch) {
+  if (!app.requestSingleInstanceLock()) {
+    app.exit(0);
+    return false;
+  }
+  app.on("second-instance", onSecondLaunch);
+  return true;
+}
+function bringToFront(window2) {
+  if (window2.isMinimized()) window2.restore();
+  window2.show();
+  window2.focus();
+}
 const GROUND = "#141822";
 const FILE_NAME = "session.bin";
 function createTokenStore(dataDir, log) {
@@ -22797,7 +25187,7 @@ function createTokenStore(dataDir, log) {
         return false;
       }
       await promises.mkdir(node_path.dirname(path), { recursive: true });
-      await promises.writeFile(path, electron.safeStorage.encryptString(JSON.stringify(credential)));
+      await writeFileAtomic(path, electron.safeStorage.encryptString(JSON.stringify(credential)));
       return true;
     },
     async clear() {
@@ -22806,11 +25196,11 @@ function createTokenStore(dataDir, log) {
   };
 }
 function createSend(window2) {
-  return (channel, payload) => {
+  return (channel, payload2) => {
     const target = window2();
     if (!target || target.isDestroyed()) return;
     if (target.webContents.isDestroyed()) return;
-    target.webContents.send(channel, payload);
+    target.webContents.send(channel, payload2);
   };
 }
 const RELEASES_OWNER = "Kodland-Sparks";
@@ -23409,6 +25799,7 @@ let editor;
 let publishing;
 let datapack;
 let python;
+let albums;
 let auth;
 let pictures;
 async function ensureDataDir() {
@@ -23419,16 +25810,6 @@ async function ensureDataDir() {
   await promises.mkdir(layout.instances, { recursive: true });
   await promises.mkdir(layout.logs, { recursive: true });
   return root;
-}
-function createLogger(dataDir) {
-  const path = node_path.join(dataDir, "logs", "launcher.log");
-  return (message) => {
-    const line = `${(/* @__PURE__ */ new Date()).toISOString()} ${message}
-`;
-    void promises.appendFile(path, line).catch(() => {
-    });
-    if (isDev) console.warn(`[launcher] ${message}`);
-  };
 }
 const WANTED_SIZE = { width: 1360, height: 940 };
 const SCREEN_MARGIN = 40;
@@ -23472,10 +25853,6 @@ function createWindow(log) {
       );
     });
   }
-  window2.on("focus", () => {
-    void publishing?.isPending().then((pending) => pending ? publishing?.resolve("the window came back") : void 0).catch(() => {
-    });
-  });
   window2.on("closed", () => {
     if (mainWindow === window2) mainWindow = void 0;
   });
@@ -23514,13 +25891,23 @@ async function reportPackSource(manifestPath, log) {
 node_dns.setDefaultResultOrder("ipv4first");
 const SPARKS_PARTITION = "persist:kodland-sparks";
 const SKIN_PROJECT_TYPE = "MODEL3D";
-if (isDev) electron.app.commandLine.appendSwitch("remote-debugging-port", "9222");
+let showLauncher;
+const isFirstLauncher = claimSingleInstance(electron.app, () => showLauncher?.());
+if (isDev && isFirstLauncher) electron.app.commandLine.appendSwitch("remote-debugging-port", "9222");
 registerImageScheme();
 void electron.app.whenReady().then(async () => {
+  if (!isFirstLauncher) return;
   const dataDir = await ensureDataDir();
   await rotateLogs(node_path.join(dataDir, "logs"));
-  const log = createLogger(dataDir);
+  const hideHome = homeHider(node_os.homedir(), process.platform);
+  const cleaned = await hideHomeInOldLogs(node_path.join(dataDir, "logs"), hideHome);
+  const log = createLogger({
+    path: node_path.join(dataDir, "logs", "launcher.log"),
+    hideHome,
+    ...isDev ? { echo: (line) => console.warn(`[launcher] ${line}`) } : {}
+  });
   log(`launcher ${electron.app.getVersion()} starting on ${process.platform}/${process.arch}`);
+  if (cleaned.rewritten > 0) log(`hid the home folder in ${cleaned.rewritten} old log file(s)`);
   loadDevEnv({
     isPackaged: electron.app.isPackaged,
     cwd: process.cwd(),
@@ -23586,14 +25973,23 @@ void electron.app.whenReady().then(async () => {
     const { width, height } = electron.screen.getPrimaryDisplay().workAreaSize;
     return { width: Math.max(854, width - 16), height: Math.max(480, height - 48) };
   };
+  let lastLauncherStatus;
   launcher = createLauncherService({
     dataDir,
     isPackaged: electron.app.isPackaged,
     bundledManifestPath: manifestPath,
     env: process.env,
+    hideHome,
     gameWindowSize,
-    onState: (state) => send("launcher:state", state),
+    onState: (state) => {
+      if (lastLauncherStatus === "running" && state.status !== "running") {
+        void albums?.ingest("the game closed");
+      }
+      lastLauncherStatus = state.status;
+      send("launcher:state", state);
+    },
     onCatalogue: () => send("catalogue:changed"),
+    isStaff: () => auth?.isStaff?.() ?? false,
     // Only somebody who may edit the pack still has personal mod switches. A
     // student cannot write them any more, so an old file must not strand them.
     isLauncherAdmin: () => auth?.isLauncherAdmin() ?? false,
@@ -23682,6 +26078,7 @@ void electron.app.whenReady().then(async () => {
     instance: () => launcher?.instancePath(),
     username: () => launcher?.usernameFor(auth?.currentIdentity()),
     gameRunning: () => launcher?.isGameRunning() ?? false,
+    account: () => auth?.currentIdentity()?.kodlandId,
     sparksUrl: () => resolveSparksUrl(process.env),
     fetchPage: async (scope, cursor) => await auth?.sparksProjects(scope, cursor, SKIN_PROJECT_TYPE) ?? {
       ok: false,
@@ -23709,30 +26106,10 @@ void electron.app.whenReady().then(async () => {
     saveDraft: async (json2) => {
       await editor?.saveDraft(json2);
     },
-    // Capabilities, never a token. Same rule as `fetchPack` and `reportInstall`.
-    saveToSparks: async (pixelDoc, modifiedFromProjectId) => await auth?.sparksSkinDraft(pixelDoc, modifiedFromProjectId) ?? {
-      ok: false,
-      failure: "unavailable"
-    },
-    mintSession: async (next) => await auth?.sparksSession(next) ?? { ok: false, failure: "unavailable" },
-    /*
-     * The ids this child owns, newest first, or nothing at all.
-     *
-     * `undefined` and `[]` mean different things here and must not be folded:
-     * an empty list is "you have published nothing", and no list is "we could
-     * not ask". The second must never resolve a publish, because a diff against
-     * a list we never saw would name whatever happened to be first.
-     */
-    ownProjectIds: async () => {
-      const result = await auth?.sparksProjects("mine", void 0, SKIN_PROJECT_TYPE);
-      return result?.ok === true ? result.items.map((item) => item.id) : void 0;
-    },
-    // The same guarded closure `auth-service` gets: only urls this process built.
-    openExternal: async (url) => {
-      if (/^https?:\/\//.test(url)) await electron.shell.openExternal(url);
-      else log("refused to open a url that is not http(s)");
-    },
-    onSkin: (state) => send("skins:state", state),
+    // The credential stays in `auth-service`, the same capability the Studios use.
+    publishProject: async (input) => await auth?.sparksCreateProject(input) ?? { ok: false, failure: "expired" },
+    updateSkin: async (input) => await auth?.sparksUpdateSkin(input) ?? { ok: false, failure: "expired" },
+    owner: () => auth?.currentIdentity()?.kodlandId,
     onLibraryChanged: () => send("skins:changed"),
     log
   });
@@ -23745,6 +26122,8 @@ void electron.app.whenReady().then(async () => {
     gameRunning: () => launcher?.isGameRunning() ?? false,
     onDatapack: (state) => send("datapack:state", state),
     onDraftsChanged: () => send("datapack:changed"),
+    // Same capability as the Python Studio: the credential stays in auth-service.
+    publishProject: async (input) => await auth?.sparksCreateProject(input) ?? { ok: false, failure: "expired" },
     log
   });
   python = createPythonService({
@@ -23752,8 +26131,49 @@ void electron.app.whenReady().then(async () => {
     packId: () => launcher?.packId(),
     onPython: (state) => send("python:state", state),
     onScriptsChanged: () => send("python:changed"),
+    // The credential stays in `auth-service`; signed out, the capability is gone
+    // and a publish reads as "expired", which is what the child is.
+    publishProject: async (input) => await auth?.sparksCreateProject(input) ?? { ok: false, failure: "expired" },
     log
   });
+  const devPhotosInbox = devPhotosInboxOf(log);
+  albums = createAlbumsService({
+    dataDir,
+    inboxes: () => [launcher?.photosInboxPath(), devPhotosInbox].filter(
+      (inbox) => inbox !== void 0
+    ),
+    makeThumb: async (png) => {
+      const image = electron.nativeImage.createFromPath(png);
+      if (image.isEmpty()) return void 0;
+      return new Uint8Array(image.resize({ width: 480, quality: "good" }).toJPEG(82));
+    },
+    onPhotosChanged: () => send("albums:changed"),
+    // Sparks' body cap, minus base64 and the JSON around the picture.
+    fitPicture: async (source) => {
+      const image = "path" in source ? electron.nativeImage.createFromPath(source.path) : electron.nativeImage.createFromBuffer(Buffer.from(source.png));
+      if (image.isEmpty()) return "unreadable";
+      const { width, height } = image.getSize();
+      const fit = fitUnder(
+        imageBudget(PUBLISH_LIMITS.bodyMaxBytes),
+        Math.max(width, height),
+        (scale, quality) => new Uint8Array(
+          (scale === 1 ? image : image.resize({ width: Math.round(width * scale), quality: "best" })).toJPEG(quality)
+        )
+      );
+      return fit?.bytes ?? "too_large";
+    },
+    photoData: async (path, maxSide) => {
+      const image = electron.nativeImage.createFromPath(path);
+      if (image.isEmpty()) return void 0;
+      const { width, height } = image.getSize();
+      const scaled = Math.max(width, height) > maxSide ? image.resize(width >= height ? { width: maxSide, quality: "best" } : { height: maxSide, quality: "best" }) : image;
+      return `data:image/jpeg;base64,${scaled.toJPEG(88).toString("base64")}`;
+    },
+    // The credential stays in `auth-service`, the same capability the Studios use.
+    publishProject: async (input) => await auth?.sparksCreateProject(input) ?? { ok: false, failure: "expired" },
+    log
+  });
+  void albums.ingest("the launcher started");
   shelf = createShelfService({
     dataDir,
     // Read through the launcher rather than rebuilt here: the instance layout
@@ -23781,6 +26201,14 @@ void electron.app.whenReady().then(async () => {
     const url = auth?.currentProfileUrl();
     if (url && /^https:\/\//.test(url)) await electron.shell.openExternal(url);
     else log("no profile url to open - Sparks has not answered yet");
+  });
+  electron.ipcMain.handle("app:open-published", async (_event, url) => {
+    if (!isSparksPageUrl(url, resolveSparksUrl(process.env))) {
+      log("refused to open a non-Sparks url from the renderer");
+      return false;
+    }
+    await electron.shell.openExternal(url);
+    return true;
   });
   electron.ipcMain.handle("auth:begin-browser-sign-in", async () => {
     await auth?.beginPairing("browser");
@@ -23830,7 +26258,10 @@ void electron.app.whenReady().then(async () => {
   electron.ipcMain.handle("my-worlds:sizes", async () => launcher?.worldSizes());
   electron.ipcMain.handle(
     "my-worlds:create",
-    async (_event, templateId) => launcher?.createWorld(templateId) ?? { ok: false, reason: "no-template" }
+    async (_event, templateId, options) => launcher?.createWorld(templateId, createWorldOptions(options)) ?? {
+      ok: false,
+      reason: "no-template"
+    }
   );
   electron.ipcMain.handle("my-worlds:choose", async (_event, id) => {
     await launcher?.chooseMyWorld(id);
@@ -23843,14 +26274,34 @@ void electron.app.whenReady().then(async () => {
     "my-worlds:delete",
     async (_event, id) => launcher?.deleteWorld(id) ?? { ok: false, reason: "not-found" }
   );
+  electron.ipcMain.handle("my-worlds:export", async (_event, id, title) => {
+    if (typeof id !== "string") return { ok: false, reason: "not-found" };
+    const options = {
+      defaultPath: node_path.join(electron.app.getPath("documents"), `${fileNameOf(title)}.zip`),
+      filters: [{ name: "Zip", extensions: ["zip"] }]
+    };
+    const owner = liveWindow();
+    const chosen = owner ? await electron.dialog.showSaveDialog(owner, options) : await electron.dialog.showSaveDialog(options);
+    if (chosen.canceled || !chosen.filePath) return { ok: false, reason: "cancelled" };
+    return await launcher?.exportWorld(id, chosen.filePath) ?? { ok: false, reason: "failed" };
+  });
+  electron.ipcMain.handle("my-worlds:import", async () => {
+    const options = {
+      properties: ["openFile"],
+      filters: [{ name: "Zip", extensions: ["zip"] }]
+    };
+    const owner = liveWindow();
+    const chosen = owner ? await electron.dialog.showOpenDialog(owner, options) : await electron.dialog.showOpenDialog(options);
+    const path = chosen.filePaths[0];
+    if (chosen.canceled || path === void 0) return { ok: false, reason: "cancelled" };
+    return await launcher?.importWorld(path) ?? { ok: false, reason: "failed" };
+  });
   electron.ipcMain.handle("skins:current", async () => shelf?.current());
   electron.ipcMain.handle("gallery:page", async (_event, scope, cursor) => {
     if (scope !== "mine" && scope !== "community") {
       return { ok: false, failure: "unavailable" };
     }
     const from = typeof cursor === "string" && cursor.length > 0 ? cursor : void 0;
-    if (scope === "mine") void publishing?.resolve("the gallery loaded").catch(() => {
-    });
     return await gallery?.page(scope, from) ?? {
       ok: false,
       failure: "unavailable"
@@ -23863,9 +26314,10 @@ void electron.app.whenReady().then(async () => {
     return datapack?.doc(slug);
   });
   electron.ipcMain.handle("datapack:save", async (_event, slug, doc2) => {
-    if (!slugOk(slug)) return;
-    if (typeof doc2 !== "string" || doc2.length > 4e6) return;
-    await datapack?.save(slug, doc2);
+    if (!slugOk(slug)) return { ok: false, reason: "rejected" };
+    if (typeof doc2 !== "string") return { ok: false, reason: "rejected" };
+    if (doc2.length > 4e6) return { ok: false, reason: "too-big" };
+    return await datapack?.save(slug, doc2) ?? { ok: false, reason: "unavailable" };
   });
   electron.ipcMain.handle(
     "datapack:create",
@@ -23897,6 +26349,20 @@ void electron.app.whenReady().then(async () => {
     if (!slugOk(slug) || typeof wanted !== "boolean") return;
     await datapack?.want(slug, wanted);
   });
+  electron.ipcMain.handle(
+    "datapack:publish",
+    async (_event, slug, meta, coverPng) => {
+      const form = readPublishMeta(meta);
+      if (!slugOk(slug) || form === void 0) {
+        return { ok: false, reason: "rejected" };
+      }
+      const cover = typeof coverPng === "string" && coverPng.startsWith("data:image/") && coverPng.length <= 2e6 ? coverPng : void 0;
+      return await datapack?.publish(slug, form, cover) ?? {
+        ok: false,
+        reason: "unavailable"
+      };
+    }
+  );
   electron.ipcMain.handle("datapack:catalogue", async () => datapack?.catalogue());
   const scriptSlugOk = (value) => typeof value === "string" && isScriptSlug(value);
   electron.ipcMain.handle("python:list", async () => await python?.scripts() ?? []);
@@ -23905,9 +26371,12 @@ void electron.app.whenReady().then(async () => {
     return python?.doc(slug);
   });
   electron.ipcMain.handle("python:save", async (_event, slug, text) => {
-    if (!scriptSlugOk(slug)) return;
-    if (typeof text !== "string" || text.length > MAX_SCRIPT_CHARS) return;
-    await python?.save(slug, text);
+    if (!scriptSlugOk(slug)) return { ok: false, reason: "rejected" };
+    if (typeof text !== "string") return { ok: false, reason: "rejected" };
+    if (text.length > MAX_SCRIPT_CHARS) {
+      return { ok: false, reason: "too-big" };
+    }
+    return await python?.save(slug, text) ?? { ok: false, reason: "unavailable" };
   });
   electron.ipcMain.handle(
     "python:create",
@@ -23940,18 +26409,64 @@ void electron.app.whenReady().then(async () => {
     if (!scriptSlugOk(slug) || typeof wanted !== "boolean") return;
     await python?.want(slug, wanted);
   });
+  electron.ipcMain.handle("python:publish", async (_event, slug, meta) => {
+    const form = readPublishMeta(meta);
+    if (!scriptSlugOk(slug) || form === void 0) {
+      return { ok: false, reason: "rejected" };
+    }
+    return await python?.publish(slug, form) ?? {
+      ok: false,
+      reason: "unavailable"
+    };
+  });
   electron.ipcMain.handle("editor:draft", async () => editor?.draft());
   electron.ipcMain.handle("editor:save-draft", async (_event, doc2) => {
     if (typeof doc2 !== "string" || doc2.length > 2e6) return;
     await editor?.saveDraft(doc2);
   });
-  electron.ipcMain.handle("editor:publish", async (_event, doc2, png) => {
-    if (typeof doc2 !== "string" || doc2.length > 2e6) return;
-    if (!(png instanceof Uint8Array) || png.length === 0 || png.length > 1e6) return;
-    await publishing?.publish(doc2, png);
+  electron.ipcMain.handle(
+    "editor:publish",
+    async (_event, doc2, png, cover, meta, mode) => {
+      const form = readPublishMeta(meta);
+      if (form === void 0 || typeof doc2 !== "string" || doc2.length > 2e6 || !(png instanceof Uint8Array) || png.length === 0 || png.length > 1e6) {
+        return { ok: false, reason: "rejected" };
+      }
+      const picture = typeof cover === "string" && cover.length <= 1e6 && /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/.test(cover) ? cover : void 0;
+      return await publishing?.publish(doc2, png, picture, form, mode === "update" ? "update" : "new") ?? {
+        ok: false,
+        reason: "unavailable"
+      };
+    }
+  );
+  electron.ipcMain.handle("editor:card", async () => {
+    const card = await publishing?.card();
+    return card ? { title: card.title } : void 0;
   });
-  electron.ipcMain.handle("editor:check-published", async () => {
-    await publishing?.resolve("the child said they published it");
+  electron.ipcMain.handle(
+    "skins:open-for-edit",
+    async (_event, source) => gallery ? openOwnSkin(
+      {
+        dataDir,
+        ownsProject: (id) => gallery?.ownsProject(id) ?? false,
+        fetchToShelf: async (id, title) => await gallery?.fetchToShelf(id, title) ?? { ok: false, reason: "download" }
+      },
+      source
+    ) : { ok: false, reason: "gone" }
+  );
+  electron.ipcMain.handle("editor:keep", async (_event, png) => {
+    if (!(png instanceof Uint8Array) || png.length === 0 || png.length > 1e6) return;
+    await editor?.keep(png);
+  });
+  electron.ipcMain.handle("editor:start", async (_event, doc2, shelfId) => {
+    if (typeof doc2 !== "string" || doc2.length > 2e6) return false;
+    if (typeof shelfId !== "string" || !/^[0-9a-f]{16}$/.test(shelfId)) return false;
+    if (!await editor?.start(doc2, shelfId)) return false;
+    const card = await cardOfShelfRow(dataDir, shelfId);
+    const who = auth?.currentIdentity()?.kodlandId;
+    await publishing?.setCard(
+      card && card.owner === void 0 && who !== void 0 && gallery?.ownsProject(card.projectId) ? { ...card, owner: who } : card
+    );
+    return true;
   });
   electron.ipcMain.handle("editor:apply", async (_event, png) => {
     if (!(png instanceof Uint8Array) || png.length === 0 || png.length > 1e6) return;
@@ -23976,10 +26491,57 @@ void electron.app.whenReady().then(async () => {
     await shelf?.keepApplied();
   });
   electron.ipcMain.handle("mods:list", async () => launcher?.mods());
+  electron.ipcMain.handle("studios:get", async () => {
+    const studios = await launcher?.studios() ?? {
+      skins: true,
+      datapacks: true,
+      python: false,
+      albums: false
+    };
+    return devPhotosInbox === void 0 ? studios : { ...studios, albums: true };
+  });
+  electron.ipcMain.handle("albums:list", async () => await albums?.photos() ?? []);
   electron.ipcMain.handle(
-    "studios:get",
-    async () => await launcher?.studios() ?? { skins: true, datapacks: true, python: false }
+    "albums:caption",
+    async (_event, id, caption) => albums?.setCaption(id, caption)
   );
+  electron.ipcMain.handle("albums:remove", async (_event, id) => {
+    await albums?.remove(id);
+  });
+  electron.ipcMain.handle("albums:books", async () => await albums?.albums() ?? []);
+  electron.ipcMain.handle("albums:book", async (_event, id) => albums?.album(id));
+  electron.ipcMain.handle(
+    "albums:create",
+    async (_event, title, pages) => albums?.createAlbum(title, pages)
+  );
+  electron.ipcMain.handle("albums:save", async (_event, album) => albums?.saveAlbum(album));
+  electron.ipcMain.handle("albums:remove-book", async (_event, id) => {
+    await albums?.removeAlbum(id);
+  });
+  electron.ipcMain.handle("albums:publish-photo", async (_event, id, meta) => {
+    const form = readPublishMeta(meta);
+    return form ? await albums?.publishPhoto(id, form) ?? { ok: false, reason: "unavailable" } : { ok: false, reason: "rejected" };
+  });
+  electron.ipcMain.handle("albums:publish-album", async (_event, id, meta, png) => {
+    const form = readPublishMeta(meta);
+    return form ? await albums?.publishAlbum(id, form, png) ?? { ok: false, reason: "unavailable" } : { ok: false, reason: "rejected" };
+  });
+  electron.ipcMain.handle(
+    "albums:photo-data",
+    async (_event, id, maxSide) => albums?.photoData(id, maxSide)
+  );
+  electron.ipcMain.handle("albums:collections", async () => await albums?.collections() ?? []);
+  electron.ipcMain.handle(
+    "albums:create-collection",
+    async (_event, title, photoIds) => albums?.createCollection(title, photoIds)
+  );
+  electron.ipcMain.handle(
+    "albums:save-collection",
+    async (_event, collection) => albums?.saveCollection(collection)
+  );
+  electron.ipcMain.handle("albums:remove-collection", async (_event, id) => {
+    await albums?.removeCollection(id);
+  });
   electron.ipcMain.handle("mods:set", async (_event, modId, enabled) => {
     if (!auth?.isLauncherAdmin()) {
       log(`refused to switch ${modId}: the pack is not this person's to change`);
@@ -23996,16 +26558,31 @@ void electron.app.whenReady().then(async () => {
     if (macAppPath) void sweepParkedBundles(macAppPath, log);
   });
   autostartIfAsked(log);
+  showLauncher = () => {
+    log("the launcher was started again: showing this window instead");
+    if (mainWindow) bringToFront(mainWindow);
+    else reopenWindow();
+  };
   electron.app.on("activate", () => {
     if (electron.BrowserWindow.getAllWindows().length > 0) return;
+    reopenWindow();
+  });
+  function reopenWindow() {
     mainWindow = createWindow(log);
     mainWindow.webContents.once("did-finish-load", () => {
       auth?.republish();
       launcher?.republish();
       updates?.republish();
     });
-  });
+  }
 });
+function devPhotosInboxOf(log) {
+  if (electron.app.isPackaged) return void 0;
+  const inbox = process.env["KODLAND_DEV_PHOTOS_INBOX"]?.trim();
+  if (!inbox) return void 0;
+  log("KODLAND_DEV_PHOTOS_INBOX is set (development only)");
+  return inbox;
+}
 function autostartIfAsked(log) {
   if (electron.app.isPackaged) return;
   const mode = process.env["KODLAND_AUTOSTART"]?.trim();
@@ -24018,3 +26595,11 @@ electron.app.on("window-all-closed", () => {
   if (launcher?.isGameRunning()) return;
   if (process.platform !== "darwin") electron.app.quit();
 });
+function createWorldOptions(value) {
+  if (typeof value !== "object" || value === null) return {};
+  const mode = value.gameMode;
+  return mode === "creative" || mode === "survival" ? { gameMode: mode } : {};
+}
+function liveWindow() {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : void 0;
+}
